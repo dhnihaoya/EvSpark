@@ -30,7 +30,7 @@ KNOWN_CKPTS = [
 ]
 
 HF_REPO = os.environ.get("EVSPARK_HF_REPO", "dhnihaoya/evspark")
-MS_REPO = os.environ.get("EVSPARK_MS_REPO", "dhnihaoya/evspark")
+MS_REPO = os.environ.get("EVSPARK_MS_REPO", "dinghao1120/EvSpark")
 
 DEFAULT_DIR = Path(__file__).resolve().parents[1] / "checkpoints"
 
