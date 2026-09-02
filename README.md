@@ -101,8 +101,8 @@ decoding) — use it for the exact-match check, not as a speed showcase.
 
 ## Checkpoints
 
-Published on [ModelScope](https://www.modelscope.cn/models/dinghao1120/EvSpark) (and Hugging Face, pending), loadable directly
-via `NeuralDraftModel.from_checkpoint`:
+Published on [Hugging Face](https://huggingface.co/dinghhhhhhhhhhhhhhh/EvSpark) and [ModelScope](https://www.modelscope.cn/models/dinghao1120/EvSpark),
+loadable directly via `NeuralDraftModel.from_checkpoint`:
 
 | Checkpoint | γ | Distill budget | Suite speedup | Note |
 |---|---:|---:|---:|---|
