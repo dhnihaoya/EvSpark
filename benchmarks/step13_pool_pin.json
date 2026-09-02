@@ -1,0 +1,43 @@
+{
+  "note": "Step 13 复扫池锁定，供 Step 13b 可比。chunk 清单抽自 benchmarks/step13_layer_rescan_S3.json 的 pools_meta。",
+  "source": "benchmarks/step13_layer_rescan_S3.json",
+  "gtdb_holdout_pin": ["DPLL01", "JARLHP"],
+  "chunks": {
+    "gtdb_v220_imgpr": [
+      "data_gtdb_train_chunk6.jsonl.gz",
+      "data_gtdb_train_chunk7.jsonl.gz"
+    ],
+    "mrna_splice_promoter": [
+      "data_mrna_stitch_train_chunk19.jsonl.gz",
+      "data_mrna_stitch_train_chunk2.jsonl.gz",
+      "data_mrna_stitch_train_chunk3.jsonl.gz",
+      "data_mrna_stitch_train_chunk4.jsonl.gz",
+      "data_mrna_stitch_train_chunk5.jsonl.gz",
+      "data_mrna_stitch_train_chunk6.jsonl.gz",
+      "data_mrna_stitch_train_chunk7.jsonl.gz",
+      "data_mrna_stitch_train_chunk8.jsonl.gz",
+      "data_mrna_stitch_train_chunk9.jsonl.gz"
+    ],
+    "ncrna": [
+      "data_ncrna_train_chunk1.jsonl.gz",
+      "data_ncrna_train_chunk2.jsonl.gz",
+      "data_ncrna_train_chunk3.jsonl.gz",
+      "data_ncrna_train_chunk4.jsonl.gz"
+    ],
+    "organelle": [
+      "data_organelle_train_chunk1.jsonl.gz"
+    ],
+    "promoters": [
+      "data_promoters_train_chunk1.jsonl.gz"
+    ]
+  },
+  "step13_pool_stats_anchor": {
+    "hg38": {"n_records": 1002, "bp": 4506458},
+    "ncbi": {"n_records": 921, "bp": 44595107},
+    "gtdb": {"n_records": 2422, "bp": 165358180},
+    "mrna": {"n_records": 3385, "bp": 160182419},
+    "ncrna": {"n_records": 706, "bp": 34144169},
+    "organelle": {"n_records": 178, "bp": 17311852},
+    "promoters": {"n_records": 111, "bp": 5502800}
+  }
+}

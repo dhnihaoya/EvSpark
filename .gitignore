@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# weights & checkpoints (download via scripts/download_ckpt.py)
+*.pt
+checkpoints/
+hf_home/
+models/
+
+# local training data / dumps
+dump_c1/
+benchmarks/phasec_ckpts/
+logs/
+*.log
+activations_debug.log
