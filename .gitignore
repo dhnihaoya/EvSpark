@@ -14,3 +14,10 @@ benchmarks/phasec_ckpts/
 logs/
 *.log
 activations_debug.log
+
+# generated evaluation results (benchmarks/eval_prompts_24.json stays tracked)
+benchmarks/eval_suite_*.json
+benchmarks/losslessness.json
+
+# packaging
+*.egg-info/

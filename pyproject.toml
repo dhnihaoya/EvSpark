@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evspark"
+version = "0.1.0"
+description = "Lossless speculative decoding for Evo2 (StripedHyena2 DNA foundation models)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "torch>=2.7",
+    "evo2",  # pulls vortex (vtx); flash-attn must match your torch build, see README §Install
+]
+
+[project.optional-dependencies]
+modelscope = ["modelscope"]  # checkpoint mirror (recommended where huggingface.co is unreachable)
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/dhnihaoya/EvSpark"
+
+[tool.setuptools.packages.find]
+include = ["evspark*"]
+
+[tool.setuptools.package-data]
+evspark = ["data/*.json"]

@@ -31,14 +31,14 @@ from pathlib import Path
 os.environ.setdefault("HF_HOME", str(Path(__file__).resolve().parents[1] / "hf_home"))
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-_SCRIPTS = Path(__file__).resolve().parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import numpy as np
 
-from specdec.genome import clean_seq
-from train.c1_pack import (
+from evspark.specdec.genome import clean_seq
+from evspark.train.c1_pack import (
     HIDDEN_DIM,
     TOPK,
     arrays_crc,
@@ -51,7 +51,7 @@ from train.c1_pack import (
     quantize_hidden,
     reconstruct_pt,
 )
-from train.data import (
+from evspark.train.data import (
     STITCH_SEP,
     load_default_corpus,
     load_dna_samples,
@@ -59,8 +59,8 @@ from train.data import (
     seq_to_ids,
     split_corpus,
 )
-from train.drafter import SCHEME_LAYERS
-from train.step12_data import (
+from evspark.train.drafter import SCHEME_LAYERS
+from evspark.train.corpora import (
     GZ_RAW_RATIO,
     complete_train_chunks,
     iter_og2_jsonl_records,
@@ -72,7 +72,7 @@ WINDOW = 4096
 SHARD_POS = 500_000
 TOTAL_POS = 300_000_000
 
-# 与 step12_retrain.MIX_WEIGHTS + --with-euk 同口径（不 import 以免 setdefault CUDA=2）
+# 七源混合配比（历史在线管线同口径：七源 ×0.9 + euk 0.10；本地复制以避免依赖训练驱动）
 MIX_SEVEN = {
     "ncbi": 0.15,
     "gtdb": 0.20,
@@ -108,7 +108,7 @@ def log(msg: str) -> None:
 def step14_weights(with_euk: bool = True, with_imgvr: bool = False) -> dict[str, float]:
     """dump 配额权重。Step 15 起 imgvr 与 euk 同法（各 0.10、七源等比让出）。
 
-    注意：这是**配额公式**；训练侧终版配比以 ``train.step15_mix.FINAL_MIX``
+    注意：这是**配额公式**；训练侧终版配比以 ``train.mix.FINAL_MIX``
     为唯一权威（两表在 imgvr 配额上同为 0.10×total，其余源差异见该模块注释）。
     """
     w = dict(MIX_SEVEN)
@@ -349,7 +349,7 @@ def verify_shard(meta_path: Path) -> None:
 def pack_window(logits, emb, layers: tuple[str, ...], ids_np: np.ndarray, scale_dtype=np.float16):
     import torch
 
-    from train.distill import unpack_logits
+    from evspark.train.distill import unpack_logits
 
     probs = torch.softmax(unpack_logits(logits)[0].float(), dim=-1)
     p_np = probs.detach().cpu().numpy()
@@ -391,7 +391,7 @@ def dump_source(
 ) -> dict:
     import torch
 
-    from train.distill import teacher_forward
+    from evspark.train.distill import teacher_forward
 
     already, next_idx = existing_progress(out_dir, name, shard_tag)
     target = min(int(quota), int(max_positions or quota))
@@ -458,7 +458,7 @@ def qc_probe(evo, device, window: int) -> dict:
     """Plan 01 §2.3 同三条序列的熵对照（质控红线）。"""
     import torch
 
-    from train.distill import teacher_forward, unpack_logits
+    from evspark.train.distill import teacher_forward, unpack_logits
 
     samples = {r.name: r.seq for r in load_dna_samples()}
     rng = np.random.default_rng(42)
@@ -542,7 +542,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict:
     import torch
 
-    from train.distill import assert_layers_exist, load_evo2
+    from evspark.train.distill import assert_layers_exist, load_evo2
 
     if args.smoke:
         args.window = min(args.window, 2048)

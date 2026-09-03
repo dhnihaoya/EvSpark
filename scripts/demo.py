@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """EvSpark demo — lossless speculative decoding for Evo2 7B.
 
-Loads Evo2 7B plus an EvSpark drafter checkpoint, generates DNA tokens with
-speculative decoding, and cross-checks against native token-by-token decoding.
+Thin CLI over the ``evspark`` library facade (scripts/evspark.py). Loads Evo2 7B
+plus an EvSpark drafter checkpoint, generates DNA tokens with speculative
+decoding, and cross-checks against native token-by-token decoding.
 
 Greedy mode asserts token-for-token equality (losslessness). Sampling mode
 reports wall-clock speedup under the same protocol as the paper
@@ -22,14 +23,13 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
-import numpy as np
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-_SCRIPTS = Path(__file__).resolve().parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+from evspark import EvSpark, clean_prompt  # noqa: E402
 
 # 1024 bp human chr21 intergenic fragment, used as the default prompt.
 DEFAULT_PROMPT = (
@@ -48,13 +48,7 @@ def load_prompt(args) -> str:
         seq = args.prompt
     else:
         seq = DEFAULT_PROMPT
-    seq = seq.upper()
-    bad = sorted(set(seq) - set("ACGTN"))
-    if bad:
-        raise ValueError(f"prompt contains non-ACGTN characters: {bad}")
-    if len(seq) < 64:
-        raise ValueError("prompt too short (<64 bp); give the model some context")
-    return seq
+    return clean_prompt(seq)
 
 
 def main() -> None:
@@ -71,83 +65,31 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    import torch
-
-    if not torch.cuda.is_available():
-        raise SystemExit("CUDA GPU required (Evo2 7B needs ~40 GB VRAM in bf16).")
-
-    from download_ckpt import ensure_ckpt
-
-    ckpt = ensure_ckpt(args.ckpt)
-
-    from evo2 import Evo2
-
-    print("[demo] loading Evo2 7B (bf16) ...", flush=True)
-    evo = Evo2("evo2_7b", use_kernels=True)
-    model, tokenizer = evo.model, evo.tokenizer
-    model.eval()
-
-    from specdec.block.loop import (
-        native_greedy_reference,
-        native_sample_reference,
-        speculative_generate,
-    )
-    from specdec.block.neural_draft import NeuralDraftModel
-
-    nd = NeuralDraftModel.from_checkpoint(model, str(ckpt), device="cuda:0")
-    gamma = args.gamma or nd.gamma
-    print(f"[demo] drafter={ckpt.name} layers={list(nd.layer_names)} gamma={gamma}")
-
     seq = load_prompt(args)
-    ids = torch.tensor(
-        np.asarray(tokenizer.tokenize(seq), dtype=np.int64)[None, :], device="cuda:0"
-    )
-    print(f"[demo] prompt={len(seq)} bp, generating {args.n_tokens} tokens "
-          f"({'greedy' if args.greedy else 'sampling T=1.0 top_k=4'})")
 
-    rng = np.random.default_rng(args.seed)
+    with EvSpark.load(args.ckpt) as es:
+        gamma = args.gamma or es.gamma
+        print(f"[demo] prompt={len(seq)} bp, generating {args.n_tokens} tokens "
+              f"({'greedy' if args.greedy else 'sampling T=1.0 top_k=4'})")
 
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    spec = speculative_generate(
-        model, nd, ids, args.n_tokens, gamma, greedy=args.greedy, rng=rng,
-        temperature=1.0, top_k=4,
-    )
-    torch.cuda.synchronize()
-    t_spec = time.perf_counter() - t0
-    nd.close()
-
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    if args.greedy:
-        nat_ids, _ip, _ = native_greedy_reference(model, ids, args.n_tokens)
-    else:
-        nat_ids = native_sample_reference(
-            model, ids, args.n_tokens, np.random.default_rng(args.seed),
-            temperature=1.0, top_k=4,
-        )
-    torch.cuda.synchronize()
-    t_nat = time.perf_counter() - t0
-
-    ks = [int(r.k) for r in spec.rounds_log]
-    tau = float(np.mean(ks) + 1.0) if ks else float("nan")
-    spec_tok_s = args.n_tokens / t_spec
-    nat_tok_s = args.n_tokens / t_nat
+        spec = es.generate(seq, args.n_tokens, greedy=args.greedy,
+                           gamma=gamma, seed=args.seed)
+        nat = es.generate_native(seq, args.n_tokens, greedy=args.greedy,
+                                 seed=args.seed)
 
     print()
-    print(f"  native      : {t_nat:7.2f} s  ({nat_tok_s:6.1f} tok/s)")
-    print(f"  speculative : {t_spec:7.2f} s  ({spec_tok_s:6.1f} tok/s)")
-    print(f"  speedup     : {t_nat / t_spec:.2f}x   "
-          f"(mean accepted tau={tau:.2f}, rounds={len(ks)})")
+    print(f"  native      : {nat.wall_s:7.2f} s  ({nat.tok_s:6.1f} tok/s)")
+    print(f"  speculative : {spec.wall_s:7.2f} s  ({spec.tok_s:6.1f} tok/s)")
+    print(f"  speedup     : {nat.wall_s / spec.wall_s:.2f}x   "
+          f"(mean accepted tau={spec.mean_tau:.2f}, rounds={spec.n_rounds})")
 
     if args.greedy:
         print("  note        : greedy on bacterial coding is the hardest cell for "
               "acceptance;\n                this mode is for the exact-match check. "
               "Use sampling mode for speed.")
-        emitted = np.asarray(spec.emitted_ids)
-        n_match = int((emitted == nat_ids).sum())
+        n_match = int((spec.ids == nat.ids).sum())
         first_diff = next(
-            (i for i in range(args.n_tokens) if emitted[i] != nat_ids[i]), None
+            (i for i in range(args.n_tokens) if spec.ids[i] != nat.ids[i]), None
         )
         if first_diff is None:
             print(f"  lossless    : {n_match}/{args.n_tokens} tokens identical to native decoding")

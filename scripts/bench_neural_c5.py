@@ -1,37 +1,44 @@
-# Step 10（Plan 02 C.5，plans/12）端到端集成测量：神经 drafter 接入切片投机循环。
+# 端到端集成测量引擎：神经 drafter 接入切片投机循环。
 #
-# 模式（默认全跑；均落盘 benchmarks/step10_c5.json）：
-#   --align-check   §2 先手：hold-out 上量化「滞后一位注入」对 ᾱ/τ̂ 的影响
-#                   （训练 ctx_lens=a+1 含锚点 hidden vs decode 可得 ctx_lens=a）
+# prompt 来自自包含评估包（evspark/data/eval_prompts_24.json（随包发布），经 evalpack 加载），
+# 不依赖外部语料。通常经 evspark.train.eval_suite 包装调用（覆盖 CKPT/GAMMA/
+# RESULTS 等模块常量），也可单独直跑。
+#
+# 模式（默认全跑；落盘 RESULTS）：
+#   --align-check   先手：量化「滞后一位注入」对 ᾱ/τ̂ 的影响
+#                   （需完整训练语料构建 eval packs，开发用，公开仓库默认缺料会报错）
 #   --smoke         1 格 32 token 通路冒烟（lacZ 采样）
-#   --greedy        无损性：4 prompt × 256 token 贪心 vs vortex 原生 top_k=1
-#   --grid          §5 核心：5 prompt × 256 token 采样（γ=7，T=1.0/top_k=4），
-#                   真实 τ、位置条件接受率、实测 tok/s 与加速比、逐轮 c_k
+#   --greedy        无损性：base 5 prompt 贪心 vs vortex 原生 top_k=1
+#   --grid          核心：24 prompt 采样（T=1.0/top_k=4），真实 τ、位置条件接受率、
+#                   实测 tok/s 与加速比、逐轮 c_k
 #
-# 用法: CUDA_VISIBLE_DEVICES=0 python scripts/bench_neural_c5.py [--all] [--align-check] ...
+# 用法: CUDA_VISIBLE_DEVICES=0 python scripts/bench_neural_c5.py [--all] [--grid] ...
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
 import time
 from pathlib import Path
 
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")  # 计划硬约束：只用 GPU0（须先于 train.distill import）
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")  # 计划硬约束：只用 GPU0（须先于 evspark.train.distill import）
 os.environ.setdefault("HF_HOME", str(Path(__file__).resolve().parents[1] / "hf_home"))
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import numpy as np
 import torch
 
-RESULTS = str(Path(__file__).resolve().parents[1] / "benchmarks" / "step10_c5.json")
-CKPT = str(Path(__file__).resolve().parents[1] / "checkpoints" / "L27_g12_80M_s1.pt")
-STEP6_JSON = str(Path(__file__).resolve().parents[1] / "benchmarks" / "step6_acceptance.json")
-STEP7_JSON = str(Path(__file__).resolve().parents[1] / "benchmarks" / "step7_slicing.json")
+import evalpack
+from evspark.checkpoints import default_ckpt_dir
+
+RESULTS = str(Path(__file__).resolve().parents[1] / "benchmarks" / "eval_suite.json")
+CKPT = str(default_ckpt_dir() / "L27_g12_80M_s1.pt")
 STEP9_JSON = str(Path(__file__).resolve().parents[1] / "benchmarks" / "step9_layer_gamma_sweep.json")
+PROMPT_PACK = str(evalpack.PROMPT_PACK)  # eval_suite 可覆盖指向其它 prompt 包
 
 SEED_STEP6 = 20260821
 SEED_GREEDY = 20260824  # 与 Step 5/7 贪心对拍同种子
@@ -44,7 +51,7 @@ DRAFTER_NAME = "neural_s3_d1024_g7_5M"
 
 
 def log(msg: str) -> None:
-    print(f"[step10] {msg}", flush=True)
+    print(f"[bench-c5] {msg}", flush=True)
 
 
 def dump(out: dict) -> None:
@@ -56,27 +63,16 @@ def dump(out: dict) -> None:
     log(f"已写入 {RESULTS}")
 
 
-def load_mod(name: str, path: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
-
-
-def load_ba():
-    return load_mod("bench_acceptance_mod", os.path.join(_HERE, "bench_acceptance.py"))
-
-
-def load_bss():
-    return load_mod("bench_state_slicing_mod", os.path.join(_HERE, "bench_state_slicing.py"))
+def load_prompts(tokenizer) -> list[dict]:
+    """加载评估 prompt 包（PROMPT_PACK 可被 eval_suite 覆盖）。"""
+    prompts = evalpack.load_prompt_pack(tokenizer, PROMPT_PACK, CTX)
+    log(f"prompt 包 {PROMPT_PACK}：{len(prompts)} 条")
+    return prompts
 
 
 def load_drafter_only(ckpt_path: str, device: torch.device):
     """只加载 drafter 权重（不挂 hook）——align-check 用。"""
-    from train.drafter import SCHEME_LAYERS, Drafter
+    from evspark.train.drafter import SCHEME_LAYERS, Drafter
 
     ck = torch.load(ckpt_path, map_location="cpu")
     drafter = Drafter.from_scheme(ck["scheme"], d_model=ck["d_model"], gamma=ck["gamma"])
@@ -103,8 +99,8 @@ def eval_ctx_shift(drafter, packs, scheme: str, gamma: int, device, cap: int, sh
     shift=0：训练口径（ctx_lens=a+1，H_ctx 含锚点自身 hidden）；
     shift=-1：decode 可得口径（ctx_lens=a，只到最后被消费位置）。
     """
-    from train.distill import gather_batch, holdout_anchors
-    from train.drafter import SCHEME_LAYERS, analytic_accept, predicted_tau
+    from evspark.train.distill import gather_batch, holdout_anchors
+    from evspark.train.drafter import SCHEME_LAYERS, analytic_accept, predicted_tau
 
     layers = SCHEME_LAYERS[scheme]
     alpha_sum = None
@@ -154,8 +150,8 @@ def eval_ctx_shift(drafter, packs, scheme: str, gamma: int, device, cap: int, sh
 
 
 def run_align_check(evo, out: dict) -> dict:
-    from train.distill import build_eval_packs, eval_drafter, pick_eval_records
-    from train.drafter import SCHEME_LAYERS
+    from evspark.train.distill import build_eval_packs, eval_drafter, pick_eval_records
+    from evspark.train.drafter import SCHEME_LAYERS
 
     device = torch.device("cuda:0")
     ck = torch.load(CKPT, map_location="cpu")
@@ -225,7 +221,7 @@ def run_align_check(evo, out: dict) -> dict:
 
 
 def run_smoke(model, nd, prompts, out: dict, n_tokens: int = 32) -> None:
-    from specdec.block.loop import speculative_generate
+    from evspark.specdec.block.loop import speculative_generate
 
     p = next(x for x in prompts if x["name"] == "lacz_coding")
     log(f"冒烟：{p['name']} 采样 n={n_tokens} γ={GAMMA}")
@@ -260,12 +256,9 @@ def run_smoke(model, nd, prompts, out: dict, n_tokens: int = 32) -> None:
     dump(out)
 
 
-def run_greedy(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
-    from specdec.block.loop import native_greedy_reference, speculative_generate
+def run_greedy(model, tokenizer, nd, out: dict, n_tokens: int, prompts: list[dict]) -> dict:
+    from evspark.specdec.block.loop import native_greedy_reference, speculative_generate
 
-    bss = load_bss()
-    bss.GAMMA = GAMMA  # summarize_greedy_case 内部引用模块级 GAMMA（默认 8），对齐本步 γ=7
-    prompts = bss.load_prompts(tokenizer, CTX)
     cases = []
     for p in prompts:
         name = p["name"]
@@ -279,10 +272,10 @@ def run_greedy(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
         )
         torch.cuda.synchronize()
         t_spec = time.perf_counter() - t0
-        nat_ids, nat_logits = bss.vortex_greedy(model, tokenizer, ids, n_tokens)
+        nat_ids, nat_logits = evalpack.vortex_greedy(model, tokenizer, ids, n_tokens)
         ref_ids, _ip, ref_logits = native_greedy_reference(model, ids, n_tokens, record_logits=True)
-        case = bss.summarize_greedy_case(
-            name, spec, nat_ids, nat_logits, ref_ids, ref_logits, t_spec, 0.0
+        case = evalpack.summarize_greedy_case(
+            name, spec, nat_ids, nat_logits, ref_ids, ref_logits, t_spec, 0.0, gamma=GAMMA
         )
         cases.append(case)
         log(
@@ -318,29 +311,17 @@ def run_greedy(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
     return out["greedy_summary"]
 
 
-def run_grid(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
-    from specdec.block.loop import native_sample_reference, speculative_generate
+def run_grid(model, tokenizer, nd, out: dict, n_tokens: int, prompts: list[dict]) -> dict:
+    from evspark.specdec.block.loop import native_sample_reference, speculative_generate
 
-    ba = load_ba()
-    hg38 = ba.load_hg38_windows(ba.HG38_CSV)
-    repeat_sel = ba.select_repeat_windows(hg38, CTX)
-    grid_prompts = ba.build_prompts(tokenizer, repeat_sel["windows"], CTX, SEED_STEP6)
+    grid_prompts = prompts
     log("网格 prompt：" + ", ".join(p["name"] for p in grid_prompts))
-
-    step6_tau = {}
-    if os.path.isfile(STEP6_JSON):
-        with open(STEP6_JSON) as f:
-            step6_tau = (json.load(f).get("tau_table") or {})
-    step7_meas = {}
-    if os.path.isfile(STEP7_JSON):
-        with open(STEP7_JSON) as f:
-            step7_meas = ((json.load(f).get("grid") or {}).get("region_metrics") or {})
 
     runs = []
     native_tok_s: dict[str, float] = {}
     for p in grid_prompts:
         name = p["name"]
-        seed = ba.run_seed(name, DRAFTER_NAME, base=SEED_STEP6)
+        seed = evalpack.run_seed(name, DRAFTER_NAME, base=SEED_STEP6)
         log(f"--- region={p['region']} prompt={name} seed={seed} ---")
         torch.cuda.synchronize()
         t0 = time.perf_counter()
@@ -352,7 +333,7 @@ def run_grid(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
         torch.cuda.synchronize()
         wall = time.perf_counter() - t0
         ks = [int(r.k) for r in spec.rounds_log]
-        m = ba.metrics_from_ks(ks, GAMMA, n_tokens, wall, ba.T1_MS, ba.TV8_MS)
+        m = evalpack.metrics_from_ks(ks, GAMMA, n_tokens, wall)
 
         log(f"  原生参照（native_sample_reference 同 prompt 同 n）…")
         torch.cuda.synchronize()
@@ -392,14 +373,6 @@ def run_grid(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
             "median_t_verify_ms": float(np.median([r.t_verify for r in spec.rounds_log]) * 1000),
             "conf_pos_mean": [float(x) for x in conf_arr.mean(axis=0)],
             "conf_rounds": conf_rounds,
-            "step6_tau_same_prompt": {
-                d: (step6_tau.get(p["region"]) or {}).get(d) for d in ba.DRAFTER_NAMES
-            },
-        }
-        # Step 7 同区实测加速（免费 drafter，γ=8 口径，仅供并排对照）
-        rec["step7_measured_same_region"] = {
-            d: (step7_meas.get(p["region"]) or {}).get(d, {}).get("speedup_measured")
-            for d in ba.DRAFTER_NAMES
         }
         runs.append(rec)
         log(
@@ -428,8 +401,6 @@ def run_grid(model, tokenizer, nd, out: dict, n_tokens: int) -> dict:
         "speedup_vs_lacz_native": {
             r["prompt"]: (r["tok_s"] / lacz_native if lacz_native else None) for r in runs
         },
-        "step6_tau_table_g8": step6_tau,
-        "repeat_selection": {k: v for k, v in repeat_sel.items() if k != "windows"},
     }
     dump(out)
     return out["grid"]
@@ -487,22 +458,25 @@ def main() -> None:
 
     nd = None
     if args.smoke or args.greedy or args.grid or run_all:
-        from specdec.block.neural_draft import NeuralDraftModel
+        from evspark.specdec.block.neural_draft import NeuralDraftModel
 
         nd = NeuralDraftModel.from_checkpoint(model, CKPT, device="cuda:0")
         log(f"神经 drafter 已挂载（层 {nd.layer_names}，γ={nd.gamma}）")
 
+    prompts = None
+    if args.smoke or args.greedy or args.grid or run_all:
+        prompts = load_prompts(tokenizer)
+
     try:
         if args.smoke or run_all:
-            bss = load_bss()
-            prompts = bss.load_prompts(tokenizer, CTX)
             run_smoke(model, nd, prompts, out, n_tokens=args.smoke_tokens)
         if args.greedy or run_all:
-            log(f"=== 贪心无损对拍（4 prompt × {args.n_tokens} token）===")
-            run_greedy(model, tokenizer, nd, out, args.n_tokens)
+            base5 = prompts[:5]
+            log(f"=== 贪心无损对拍（{len(base5)} base prompt × {args.n_tokens} token）===")
+            run_greedy(model, tokenizer, nd, out, args.n_tokens, base5)
         if args.grid or run_all:
-            log(f"=== §5 网格（5 prompt × {args.n_tokens} token，γ={GAMMA} 采样）===")
-            run_grid(model, tokenizer, nd, out, args.n_tokens)
+            log(f"=== 网格（{len(prompts)} prompt × {args.n_tokens} token，γ={GAMMA} 采样）===")
+            run_grid(model, tokenizer, nd, out, args.n_tokens, prompts)
     finally:
         if nd is not None:
             nd.close()

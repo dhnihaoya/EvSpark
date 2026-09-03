@@ -12,7 +12,7 @@ decoding.
 
 ![demo](assets/evspark_demo.gif)
 
-*Same prompt, same weights — left: native Evo2 decoding, right: EvSpark speculative decoding.*
+*Same prompt, same weights — left: native Evo2 decoding, right: EvSpark speculative decoding. Both sides sample from the same distribution (T=1.0, top_k=4) but with different random seeds, so the emitted sequences legitimately differ — EvSpark's guarantee is distributional equivalence (and token-for-token identity in greedy mode), not identical samples.*
 
 ## Why this is non-trivial
 
@@ -20,13 +20,13 @@ Evo2 is a **StripedHyena2 hybrid** (hyena IIR filters + sparse attention), so cl
 KV-cache rollback does not apply. EvSpark contributes:
 
 - **State-slice rollback** over both Hyena IIR filter states and attention KV
-  (`scripts/specdec/block/slice.py`) — no full replay, rollback cost <5% of a step.
+  (`evspark/specdec/block/slice.py`) — no full replay, rollback cost <5% of a step.
 - **A distilled γ-parallel drafter** conditioned on injected mid/late-layer hidden
   states, with a Markov-bias head and per-position confidence
-  (`scripts/train/drafter.py`, `scripts/specdec/block/neural_draft.py`).
+  (`evspark/train/drafter.py`, `evspark/specdec/block/neural_draft.py`).
 - **Exact verification**: block forward with initial-state injection
-  (`scripts/specdec/block/driver.py`) + rejection-sampling verifier
-  (`scripts/specdec/verifier.py`) — greedy-exact, sampling-distribution-exact.
+  (`evspark/specdec/block/driver.py`) + rejection-sampling verifier
+  (`evspark/specdec/verifier.py`) — greedy-exact, sampling-distribution-exact.
 
 ## Results at a glance
 
@@ -55,12 +55,17 @@ H100). Note: Ada GPUs (4090) run Evo2 in **bf16** only — the FP8/Transformer-E
 path requires Hopper.
 
 ```bash
+git clone https://github.com/dhnihaoya/EvSpark && cd EvSpark
 conda create -n evo2 python=3.11 -y && conda activate evo2
 pip install torch==2.7.1            # cu126/cu128 wheels both work on Ada
 pip install flash-attn==2.8.0.post2 # prebuilt wheels on PyPI for torch 2.7
 pip install evo2                    # pulls vortex (vtx)
 python -m evo2.test.test_evo2_generation --model_name evo2_7b   # smoke test
 ```
+
+Everything runs from the repo root — no installation of EvSpark itself is
+needed (the `evspark` package is importable from the repo root directly).
+Optionally `pip install -e .` to import it from anywhere.
 
 The first run downloads the Evo2 7B weights (~13 GB) from Hugging Face
 automatically; set `HF_ENDPOINT=https://hf-mirror.com` if huggingface.co is
@@ -85,19 +90,40 @@ python scripts/demo.py --ckpt L27_g12_80M_s1 --prompt-file my_genome_window.fa
 Expected output (single RTX 4090, greedy, 128 tokens):
 
 ```
-[demo] drafter=L27_g12_80M_s1.pt layers=['blocks.27'] gamma=12
+[evspark] drafter=L27_g12_80M_s1.pt layers=['blocks.27'] gamma=12
 [demo] prompt=1024 bp, generating 1024 tokens (sampling T=1.0 top_k=4)
 
   native      :   23.51 s  (  43.6 tok/s)
   speculative :    9.01 s  ( 113.6 tok/s)
   speedup     : 2.61x   (mean accepted tau=6.04, rounds=171)
 ```
-
 Single-prompt demo on a human chr21 intergenic window. Speedup is
 region-dependent: bacterial coding is the hardest cell (~1.1–1.3×), intergenic
 and random regions reach 4–6×; the 24-prompt suite mean is 3.16×. Greedy mode
 on coding regions degenerates into repeats (a known property of greedy DNA
 decoding) — use it for the exact-match check, not as a speed showcase.
+
+## Use it as a library
+
+From the repo root (or anywhere after `pip install -e .`):
+
+```python
+from evspark import EvSpark
+
+with EvSpark.load("L27_g12_80M_s1") as es:      # auto-downloads the drafter ckpt
+    res = es.generate("ACGTACGT...", n_tokens=1024)   # sampling (T=1.0, top_k=4)
+    print(res.text, f"{res.tok_s:.1f} tok/s, tau={res.mean_tau:.2f}")
+
+    g = es.generate(prompt, greedy=True)              # exact greedy
+    nat = es.generate_native(prompt, greedy=True)     # native reference
+    assert g.ids.tolist() == nat.ids.tolist()         # token-for-token identical
+```
+
+`EvSpark.load()` accepts a checkpoint name (see the table below; downloaded to
+`~/.cache/evspark/checkpoints`, override with `EVSPARK_CKPT_DIR`), a local `.pt`
+path, or another Evo2 model via `model_name=`. Greedy output is token-for-token
+identical to native decoding; sampling follows the same distribution
+(rejection-sampled verification, see paper).
 
 ## Checkpoints
 
@@ -116,19 +142,27 @@ frozen Evo2 hidden states; the target model is never fine-tuned.
 ## Repository layout
 
 ```
-scripts/specdec/    speculative-decoding engine (verifier, transforms, block
+evspark/            the pip-installable package
+  api.py            library facade: EvSpark.load(...).generate(...)
+  checkpoints.py    checkpoint resolution/download (HF + ModelScope)
+  specdec/          speculative-decoding engine (verifier, transforms, block
                     forward, state slicing, spec loop, statistical drafters)
-scripts/train/      drafter definition, offline distillation, evaluation suite
-scripts/tests/      pytest suite (CPU + GPU; GPU tests auto-skip without CUDA)
-scripts/demo.py     minimal end-to-end demo (losslessness check + speedup)
-scripts/download_ckpt.py   checkpoint fetcher (Hugging Face / ModelScope)
+  train/            drafter definition (drafter.py), corpus pools (corpora.py),
+                    training mix (mix.py), offline distillation
+                    (train_drafter.py), evaluation suite (eval_suite.py)
+  data/eval_prompts_24.json   the paper's 24-prompt suite (self-contained)
+scripts/            CLIs & dev tools: demo.py, download_ckpt.py, evalpack.py,
+                    bench_neural_c5.py, bench_lossless.py, dump_c1_dataset.py,
+                    launch_ddp.sh
+tests/              pytest suite (CPU + GPU; GPU tests auto-skip without CUDA)
 docs/reproduce.md   full evaluation & training reproduction chain
 ```
 
 ## Reproduce the paper numbers
 
 See [docs/reproduce.md](docs/reproduce.md): hidden-state dump → drafter training
-(single GPU or DDP) → 24-prompt evaluation suite.
+(single GPU or DDP) → 24-prompt evaluation suite. The evaluation runs entirely
+off the packaged prompt suite — no external corpus needed.
 
 ## Citation
 
