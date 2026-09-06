@@ -6,12 +6,15 @@ CPU（torch 即可，无需 CUDA）：
 2. H_ctx 滞后口径——decode 式滚动缓冲喂法与 eval 式滞后掩码（ctx_lens=a）
    逐位一致（plans/12 §2 对齐结论的机械钉死）。
 3. ``HiddenCapture`` 滚动缓冲：begin/commit/discard、窗口截断、拒绝剔除。
+4. decode-γ 解耦（Step 18 A2）：γ′ ≤ 训练 γ 的 trunk 精确前缀
+   （随机 init + 已发布 γ12 ckpt：跨 shape 容差、同 shape 逐位、argmax 100%）、
+   串行头 γ′ 一致、guard（γ′ > 训练 γ / γ′ = 0 报错）。
 
 GPU（迷你 StripedHyena，fp32）：
-4. 循环集成——神经 drafter 跑 slice 循环，H_ctx 缓冲与「整段重算」对拍；
+5. 循环集成——神经 drafter 跑 slice 循环，H_ctx 缓冲与「整段重算」对拍；
    贪心输出与逐步参照全等；guard（snapshot/外部状态/γ 不符）报错。
 
-无 torch/vortex 时本文件整体 skip（CPU 套件不受影响）；无 CUDA 时第 4 项 skip。
+无 torch/vortex 时本文件整体 skip（CPU 套件不受影响）；无 CUDA 时第 5 项 skip。
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -37,6 +42,7 @@ from evspark.specdec.block.neural_draft import (  # noqa: E402
     trunk_forward,
 )
 from evspark.train.drafter import VOCAB_SIZE, Drafter  # noqa: E402
+from evspark.checkpoints import default_ckpt_dir  # noqa: E402
 
 SEED = 20260830
 GAMMA = 4
@@ -238,7 +244,148 @@ def test_hidden_capture_commit_window_and_reject_trim():
 
 
 # ---------------------------------------------------------------------------
-# 3. GPU：迷你模型循环集成 + 缓冲 vs 整段重算
+# 3. decode-γ 解耦（Step 18 A2）：γ′ ≤ 训练 γ = 精确前缀
+# ---------------------------------------------------------------------------
+
+
+def test_trunk_forward_decode_gamma_prefix_random():
+    """随机初始化 γ=16：trunk_forward(γ′=8) == trunk_forward(γ=16) 的前 8 行。"""
+    d = _small_drafter(gamma=16)
+    T = 10
+    h_raw = _rand_ctx(T)
+    anchor = torch.tensor([65])
+    ctx_lens = torch.tensor([T])
+    with torch.no_grad():
+        U16, h16 = trunk_forward(d, anchor, h_raw, ctx_lens)
+        U8, h8 = trunk_forward(d, anchor, h_raw, ctx_lens, gamma=8)
+        # 同 shape 重跑：逐位一致（沿用「同输入逐位一致」口径）
+        U16b, h16b = trunk_forward(d, anchor, h_raw, ctx_lens)
+        U8b, h8b = trunk_forward(d, anchor, h_raw, ctx_lens, gamma=8)
+    assert U16.shape == (1, 16, VOCAB_SIZE) and h16.shape == (1, 16, D_MODEL)
+    assert U8.shape == (1, 8, VOCAB_SIZE) and h8.shape == (1, 8, D_MODEL)
+    assert torch.equal(U16, U16b) and torch.equal(h16, h16b)
+    assert torch.equal(U8, U8b) and torch.equal(h8, h8b)
+    # 跨 shape 前缀一致：kernel 归约顺序差异，容差 atol=2e-5 / rtol=1e-4
+    dU = float((U8 - U16[:, :8]).abs().max())
+    dh = float((h8 - h16[:, :8]).abs().max())
+    print(f"[decode-γ前缀-随机init] γ′=8 vs γ=16 前 8 行 max|ΔU|={dU:.3e} max|Δh|={dh:.3e}")
+    np.testing.assert_allclose(
+        U8.numpy(), U16[:, :8].numpy(), atol=2e-5, rtol=1e-4,
+        err_msg=f"U 前缀不一致 max|ΔU|={dU:.3e}",
+    )
+    np.testing.assert_allclose(
+        h8.numpy(), h16[:, :8].numpy(), atol=2e-5, rtol=1e-4,
+        err_msg=f"h 前缀不一致 max|Δh|={dh:.3e}",
+    )
+
+
+def test_serial_sample_decode_gamma_prefix_consistency():
+    """γ′=8 串行头输出 == γ=16 串行头前 8 位（teacher-forced 同前驱序列）。"""
+    d = _small_drafter(gamma=16)
+    T = 10
+    h_raw = _rand_ctx(T)
+    anchor_tok = 65
+    forced = np.array([65, 67, 71, 84, 78, 65, 67, 71, 84, 78, 65, 67, 71, 84, 78, 65], dtype=np.int64)
+    with torch.no_grad():
+        U16, h16 = trunk_forward(d, torch.tensor([anchor_tok]), h_raw, torch.tensor([T]))
+        U8, h8 = trunk_forward(d, torch.tensor([anchor_tok]), h_raw, torch.tensor([T]), gamma=8)
+        _, q16, c16 = serial_sample(
+            d, U16, h16, anchor_tok, True, np.random.default_rng(0), forced_tokens=forced
+        )
+        t8, q8, c8 = serial_sample(
+            d, U8, h8, anchor_tok, True, np.random.default_rng(0), forced_tokens=forced[:8]
+        )
+    np.testing.assert_array_equal(t8, forced[:8])
+    dq = float(np.abs(q8 - q16[:8]).max())
+    dc = float(np.abs(c8 - c16[:8]).max())
+    print(f"[decode-γ串行头] γ′=8 vs γ=16 前 8 位 max|Δq|={dq:.3e} max|Δconf|={dc:.3e}")
+    np.testing.assert_allclose(
+        q8, q16[:8], atol=2e-5, rtol=1e-4, err_msg=f"q_rows 前缀不一致 max|Δ|={dq:.3e}"
+    )
+    np.testing.assert_allclose(
+        c8, c16[:8], atol=2e-5, rtol=1e-4, err_msg=f"conf 前缀不一致 max|Δ|={dc:.3e}"
+    )
+
+
+G12_CKPT = default_ckpt_dir() / "L27_g12_80M_s1.pt"
+
+
+@pytest.mark.skipif(not G12_CKPT.is_file(), reason="需要已下载的 γ12 ckpt（evspark ckpt 缓存）")
+def test_trunk_forward_decode_gamma_prefix_real_ckpt():
+    """已发布 γ12 ckpt：drafter-only 构建，γ′∈{4,8} vs γ=12 前缀一致 + argmax 100%。"""
+    ck = torch.load(G12_CKPT, map_location="cpu")
+    d = Drafter.from_scheme(ck["scheme"], d_model=ck["d_model"], gamma=ck["gamma"])
+    d.load_state_dict(ck["state_dict"])
+    d.eval()
+    for p in d.parameters():
+        p.requires_grad_(False)
+    del ck
+    assert d.gamma == 12
+    g = torch.Generator().manual_seed(SEED + 20)
+    T = 24  # ≤ ctx_window=64
+    h_raw = torch.randn(T, d.n_inject * 4096, generator=g)
+    anchor = torch.tensor([65])
+    ctx_lens = torch.tensor([T])
+    with torch.no_grad():
+        U12, h12 = trunk_forward(d, anchor, h_raw, ctx_lens)
+        for gp in (4, 8):
+            Ug, hg = trunk_forward(d, anchor, h_raw, ctx_lens, gamma=gp)
+            dU = float((Ug - U12[:, :gp]).abs().max())
+            dh = float((hg - h12[:, :gp]).abs().max())
+            agree = float((Ug[0].argmax(-1) == U12[0, :gp].argmax(-1)).float().mean())
+            print(
+                f"[decode-γ前缀-真实ckpt] γ′={gp} max|ΔU|={dU:.3e} "
+                f"max|Δh|={dh:.3e} argmax一致率={agree:.4f}"
+            )
+            np.testing.assert_allclose(
+                Ug.numpy(), U12[:, :gp].numpy(), atol=2e-5, rtol=1e-4,
+                err_msg=f"γ′={gp} U 前缀不一致 max|ΔU|={dU:.3e}",
+            )
+            np.testing.assert_allclose(
+                hg.numpy(), h12[:, :gp].numpy(), atol=2e-5, rtol=1e-4,
+                err_msg=f"γ′={gp} h 前缀不一致 max|Δh|={dh:.3e}",
+            )
+            assert agree == 1.0, f"γ′={gp} argmax 逐位一致率 {agree:.4f} ≠ 100%"
+
+
+def test_decode_gamma_guards():
+    """guard：γ′ > 训练 γ / γ′ = 0 报错；γ′ = 训练 γ 与 γ′ < 训练 γ 正常。"""
+    d = Drafter(
+        d_model=D_MODEL, n_layers=2, gamma=GAMMA, n_inject=0,
+        n_heads=2, target_hidden=TARGET_HIDDEN,
+    )
+    d.eval()
+    nd = NeuralDraftModel(_ToyModel(), d, ())  # 无注入层 → H_ctx=None 路径
+    try:
+        with pytest.raises(ValueError, match="训练 γ"):
+            nd.propose_block(65, GAMMA + 1, True, np.random.default_rng(0))
+        toks, q_rows, confs = nd.propose_block(65, GAMMA, True, np.random.default_rng(0))
+        assert toks.shape == (GAMMA,) and q_rows.shape == (GAMMA, VOCAB_SIZE)
+        assert confs.shape == (GAMMA,)
+        toks2, q_rows2, confs2 = nd.propose_block(65, 2, True, np.random.default_rng(0))
+        assert toks2.shape == (2,) and q_rows2.shape == (2, VOCAB_SIZE)
+        assert confs2.shape == (2,)
+    finally:
+        nd.close()
+
+    d16 = _small_drafter(gamma=16)
+    anchor = torch.tensor([65])
+    h_raw = _rand_ctx(4)
+    ctx_lens = torch.tensor([4])
+    with torch.no_grad():
+        with pytest.raises(ValueError, match="γ"):
+            trunk_forward(d16, anchor, h_raw, ctx_lens, gamma=0)
+        with pytest.raises(ValueError, match="γ"):
+            trunk_forward(d16, anchor, h_raw, ctx_lens, gamma=17)
+        U16, h16 = trunk_forward(d16, anchor, h_raw, ctx_lens)
+    # serial_sample：U 的 γ′=16 > d.gamma=4 → 报错
+    d4 = _small_drafter()
+    with pytest.raises(ValueError, match="γ"):
+        serial_sample(d4, U16, h16, 65, True, np.random.default_rng(0))
+
+
+# ---------------------------------------------------------------------------
+# 4. GPU：迷你模型循环集成 + 缓冲 vs 整段重算
 # ---------------------------------------------------------------------------
 
 

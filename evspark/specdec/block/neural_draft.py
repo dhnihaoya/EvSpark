@@ -17,6 +17,12 @@
   （``trunk_forward``，**不含** Markov 偏置）；随后串行采样
   ``q_k = softmax(U_k + B[x_{k−1}])``，经与 target 相同的 top_k 变换（复用
   ``loop._q_prime_from_raw``）采 x_k。置信度头逐位记录（本轮默认不截断）。
+- **decode-γ 解耦**（Step 18 A2，plans/21 D10）：trunk 对 draft 位严格因果
+  （``build_kv_prefix_mask``：query j 只可见 ≤j 的 draft 位），位置表
+  ``pos`` 按行索引、ctx KV 前缀与 γ 无关、Markov/置信头逐位独立 → γ 训练的
+  drafter 只取前 γ′≤γ 位解码是**精确前缀计算**（反向不允许：pos 表只有 γ 行）。
+  ``trunk_forward``/``propose_block`` 收可选 γ′；``serial_sample`` 从
+  ``U.shape[1]`` 推 γ′，conf 头用 ``h[0]`` 的 γ′ 行，天然一致。
 - 数值约定：trunk 全部 fp32（与训练一致）；``serial_sample`` 的 q′/采样与
   ``loop._propose_draft`` 同契约（采样返回 q′ 行、贪心返回原始 q 行，
   rng 逐位消耗顺序一致）。``forced_tokens`` 供单测做 teacher-forced 对拍：
@@ -149,17 +155,32 @@ def trunk_forward(
     anchor_ids: torch.Tensor,
     h_raw: torch.Tensor | None,
     ctx_lens: torch.Tensor,
+    *,
+    gamma: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """并行 trunk：``Drafter.forward`` 去掉 Markov 偏置与 conf 头的同构实现。
 
-    返回 ``(U, h)``：``U [B, γ, V]`` 为加偏置**之前**的 logits（fp32），
-    ``h [B, γ, d]`` 为 final_ln 后的 trunk 隐状态（conf 头用）。
-    与 ``Drafter.forward`` 逐算子同序，同输入下逐位一致（单测钉死）。
+    ``gamma=None``（默认）用训练 γ；显式 γ′ 须满足 ``1 ≤ γ′ ≤ drafter.gamma``
+    （Step 18 A2 decode-γ 解耦）。γ′ < 训练 γ 时 ``make_block_ids`` / 位置表
+    ``pos`` 的 arange / ``build_kv_prefix_mask`` 全部按 γ′ 构建——trunk 对
+    draft 位因果（query j 只可见 ≤j）、pos 按行索引、ctx KV 前缀与 γ 无关，
+    故 ``(U, h)`` 恰为 γ 版本的前 γ′ 行（**精确前缀**；跨 shape 的 kernel
+    归约顺序差异仅引入 ulp 级数值噪声，单测容差钉死）。反向（γ′ > 训练 γ）
+    不允许：pos 表只有训练 γ 行。
+
+    返回 ``(U, h)``：``U [B, γ′, V]`` 为加偏置**之前**的 logits（fp32），
+    ``h [B, γ′, d]`` 为 final_ln 后的 trunk 隐状态（conf 头用）。
+    与 ``Drafter.forward`` 逐算子同序，同输入同 γ 下逐位一致（单测钉死）。
     """
     bsz = int(anchor_ids.shape[0])
-    gamma = drafter.gamma
+    gamma = drafter.gamma if gamma is None else int(gamma)
+    if not 1 <= gamma <= drafter.gamma:
+        raise ValueError(
+            f"decode γ′ 须满足 1 ≤ γ′ ≤ 训练 γ={drafter.gamma}，得到 {gamma}"
+            f"（pos 表只有 {drafter.gamma} 行，反向不支持）"
+        )
     draft_ids = make_block_ids(anchor_ids, gamma, drafter.mask_id)
-    tok_emb = drafter.embed(draft_ids)  # [B, γ, H] 冻结
+    tok_emb = drafter.embed(draft_ids)  # [B, γ′, H] 冻结
     h = drafter.in_proj(tok_emb.float())
     pos_ix = torch.arange(gamma, device=h.device).unsqueeze(0).expand(bsz, -1)
     h = h + drafter.pos(pos_ix)
@@ -186,20 +207,24 @@ def serial_sample(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """串行 Markov 头：``q_k = softmax(U_k + B[x_{k−1}])``，x_0 的前驱 = 锚点。
 
+    γ′ 从 ``U.shape[1]`` 推（Step 18 A2 起与 ``drafter.gamma`` 解耦：
+    γ′ ≤ 训练 γ 即精确前缀，conf 头用 ``h[0]`` 的 γ′ 行，天然一致）。
     采样路径：q 经 ``_q_prime_from_raw``（与 target 相同的 top_k 变换）得 q′，
     从 q′ 采样，返回的 ``q_rows`` 即 q′（verify 契约）。贪心路径不变换、
     argmax（最小 index tie-break），``q_rows`` 为原始 q。
-    ``forced_tokens``（长度 γ）：逐位强制草稿取值（teacher-forced 对拍用），
+    ``forced_tokens``（长度 γ′）：逐位强制草稿取值（teacher-forced 对拍用），
     此时不消耗 rng。
 
-    返回 ``(tokens[γ], q_rows[γ, V], confs[γ])``；conf 用最终前驱序列
-    ``[anchor, x_1..x_{γ−1}]`` 一次性计算，与训练侧 ``Drafter.forward`` 同形。
+    返回 ``(tokens[γ′], q_rows[γ′, V], confs[γ′])``；conf 用最终前驱序列
+    ``[anchor, x_1..x_{γ′−1}]`` 一次性计算，与训练侧 ``Drafter.forward`` 同形。
     """
-    gamma = drafter.gamma
-    if U.shape != (1, gamma, VOCAB_SIZE):
-        raise ValueError(f"U 须为 [1, {gamma}, {VOCAB_SIZE}]，得到 {tuple(U.shape)}")
+    if U.dim() != 3 or U.shape[0] != 1 or U.shape[2] != VOCAB_SIZE or U.shape[1] > drafter.gamma:
+        raise ValueError(
+            f"U 须为 [1, γ′, {VOCAB_SIZE}] 且 γ′ ≤ 训练 γ={drafter.gamma}，得到 {tuple(U.shape)}"
+        )
+    gamma = int(U.shape[1])
     if forced_tokens is not None and len(forced_tokens) != gamma:
-        raise ValueError(f"forced_tokens 长度须为 γ={gamma}")
+        raise ValueError(f"forced_tokens 长度须为 γ′={gamma}")
 
     tokens = np.empty(gamma, dtype=np.int64)
     q_rows = np.empty((gamma, VOCAB_SIZE), dtype=np.float64)
@@ -224,7 +249,7 @@ def serial_sample(
     prev_ids[0] = int(anchor_id)
     if gamma > 1:
         prev_ids[1:] = torch.as_tensor(tokens[:-1], dtype=torch.long, device=U.device)
-    prev_emb = drafter.in_proj(drafter.embed(prev_ids).float())  # [γ, d]
+    prev_emb = drafter.in_proj(drafter.embed(prev_ids).float())  # [γ′, d]
     conf = torch.sigmoid(drafter.conf_w(torch.cat([h[0], prev_emb], dim=-1)).squeeze(-1))
     confs = conf.detach().float().cpu().numpy().astype(np.float64, copy=False)
     return tokens, q_rows, confs
@@ -302,15 +327,22 @@ class NeuralDraftModel:
         temperature: float = 1.0,
         top_k: int | None = 4,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """一轮并行草稿：返回 ``(draft_tokens[γ], q_rows[γ, V], confs[γ])``。"""
-        if int(gamma) != self.gamma:
-            raise ValueError(f"drafter 训练 γ={self.gamma}，不支持循环 γ={gamma}")
+        """一轮并行草稿：返回 ``(draft_tokens[γ′], q_rows[γ′, V], confs[γ′])``。
+
+        ``gamma`` 为 decode γ′，须 ≤ 训练 γ（Step 18 A2 解耦：γ′ < 训练 γ =
+        精确前缀计算；γ′ > 训练 γ 报 ValueError——pos 表只有训练 γ 行）。
+        """
+        if int(gamma) > self.gamma:
+            raise ValueError(
+                f"decode γ={gamma} > drafter 训练 γ={self.gamma}：只允许 decode γ ≤ 训练 γ"
+                f"（pos 表只有 {self.gamma} 行；更长的草稿请用更大 γ 训练的 ckpt）"
+            )
         device = self.drafter.pos.weight.device
         h_raw = self.capture.context_tensor(self.drafter.ctx_window)
         ctx_len = 0 if h_raw is None else int(h_raw.shape[0])
         ctx_lens = torch.tensor([ctx_len], dtype=torch.long, device=device)
         anchor = torch.tensor([int(anchor_id)], dtype=torch.long, device=device)
-        U, h = trunk_forward(self.drafter, anchor, h_raw, ctx_lens)
+        U, h = trunk_forward(self.drafter, anchor, h_raw, ctx_lens, gamma=int(gamma))
         return serial_sample(
             self.drafter,
             U,

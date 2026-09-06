@@ -52,7 +52,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="论文评估套件（神经 ckpt × 自包含 prompt 包）")
     ap.add_argument("--ckpt", type=str, required=True)
     ap.add_argument("--tag", type=str, required=True)
-    ap.add_argument("--gamma", type=int, default=None, help="默认读 ckpt 元数据")
+    ap.add_argument("--gamma", type=int, default=None,
+                    help="decode γ′，默认读 ckpt 元数据（训练 γ）；须 ≤ 训练 γ"
+                         "（decode-γ 解耦：γ′<训练γ 为精确前缀）")
     ap.add_argument("--n-tokens", type=int, default=1024)
     ap.add_argument("--modes", type=str, default="grid", help="smoke,greedy,grid 子集")
     ap.add_argument("--results", type=str, default=None)

@@ -130,7 +130,11 @@ class EvSpark:
         top_k: int = 4,
     ) -> GenerateResult:
         """投机解码（无损）。greedy=True 时与原生逐 token 逐位相等
-        （bf16 tie-flip 除外，见论文 losslessness 一节）。"""
+        （bf16 tie-flip 除外，见论文 losslessness 一节）。
+
+        ``gamma`` 为 decode γ′，缺省 = ckpt 训练 γ；须满足 1 ≤ γ′ ≤ 训练 γ
+        （decode-γ 解耦：trunk 对 draft 位严格因果、pos 按行索引，γ′<训练γ
+        是精确前缀计算，无损性不受影响）。"""
         import torch
 
         from evspark.specdec.block.loop import speculative_generate

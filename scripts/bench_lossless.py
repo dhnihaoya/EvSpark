@@ -271,6 +271,8 @@ def main() -> None:
     ap.add_argument("--greedy-ckpt", action="append", default=[],
                     help="贪心对拍 checkpoint（可多次；如 xxx.pt,tag 或纯路径）")
     ap.add_argument("--kl-ckpt", type=str, default=None, help="采样 KL 测量 checkpoint")
+    ap.add_argument("--kl-gamma", type=int, default=None,
+                    help="KL 解码 γ′（默认 ckpt 训练 γ；须 ≤ 训练 γ，decode-γ 解耦）")
     ap.add_argument("--n-tokens", type=int, default=1024)
     ap.add_argument("--kl-chains", type=int, default=12)
     ap.add_argument("--kl-len", type=int, default=512)
@@ -340,7 +342,11 @@ def main() -> None:
         missing = [w for w in want if w not in {p["name"] for p in prompts}]
         if missing:
             log(f"警告：KL prompt 不在集合内 {missing}（可用 {[p['name'] for p in prompts]}）")
-        out["sampling_kl"] = run_kl(model, nd, kl_prompts, args.kl_chains, args.kl_len, int(nd.gamma), tag)
+        gamma_kl = int(args.kl_gamma) if args.kl_gamma else int(nd.gamma)
+        if gamma_kl > int(nd.gamma):
+            raise ValueError(f"KL γ′={gamma_kl} > 训练 γ={nd.gamma}（decode-γ 只允许更小）")
+        tag = f"{tag}_dg{gamma_kl}" if gamma_kl != int(nd.gamma) else tag
+        out["sampling_kl"] = run_kl(model, nd, kl_prompts, args.kl_chains, args.kl_len, gamma_kl, tag)
         dump(out, results_path)
         nd.close()
 
