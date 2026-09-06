@@ -11,10 +11,10 @@ reports wall-clock speedup under the same protocol as the paper
 
 Usage:
     # auto-download the flagship drafter (gamma=12, 80M distill tokens) on first run
-    python scripts/demo.py --ckpt L27_g12_80M_s1
+    python scripts/demo.py --ckpt L27_g12_150M_s1
 
     # greedy losslessness check on your own sequence
-    python scripts/demo.py --ckpt L27_g12_80M_s1 --greedy --prompt-file my_seq.fa
+    python scripts/demo.py --ckpt L27_g12_150M_s1 --greedy --prompt-file my_seq.fa
 
 Requires one GPU with ~40 GB free memory (RTX 4090/5090, A100, H100).
 """
@@ -53,7 +53,7 @@ def load_prompt(args) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--ckpt", default="L27_g12_80M_s1",
+    ap.add_argument("--ckpt", default="L27_g12_150M_s1",
                     help="drafter checkpoint: local .pt path or a known name "
                          "(auto-downloaded from Hugging Face / ModelScope)")
     ap.add_argument("--prompt", type=str, default=None, help="DNA string (ACGTN)")

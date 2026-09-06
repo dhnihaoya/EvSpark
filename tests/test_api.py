@@ -17,7 +17,7 @@ if str(_ROOT) not in sys.path:
 from evspark import EvSpark, clean_prompt, ids_to_text  # noqa: E402
 from evspark.checkpoints import default_ckpt_dir  # noqa: E402
 
-_CKPT = default_ckpt_dir() / "L27_g12_80M_s1.pt"
+_CKPT = default_ckpt_dir() / "L27_g12_150M_s1.pt"
 
 
 def test_clean_prompt_normalizes():
@@ -46,7 +46,7 @@ def test_ids_to_text_clips_oob():
 
 @pytest.mark.skipif(
     not _CKPT.is_file(),
-    reason="需要已下载的 drafter ckpt（python scripts/download_ckpt.py L27_g12_80M_s1）",
+    reason="需要已下载的 drafter ckpt（python scripts/download_ckpt.py L27_g12_150M_s1）",
 )
 def test_gpu_generate_greedy_lossless():
     """GPU 冒烟：16 token 贪心，投机与原生逐位一致。"""

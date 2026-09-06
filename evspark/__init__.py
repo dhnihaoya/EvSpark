@@ -4,7 +4,7 @@ Usage::
 
     from evspark import EvSpark
 
-    with EvSpark.load("L27_g12_80M_s1") as es:   # auto-downloads the drafter ckpt
+    with EvSpark.load("L27_g12_150M_s1") as es:   # auto-downloads the drafter ckpt
         res = es.generate("ACGTACGT...", n_tokens=1024)   # sampling (T=1.0, top_k=4)
         print(res.text, f"{res.tok_s:.1f} tok/s, tau={res.mean_tau:.2f}")
 

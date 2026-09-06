@@ -10,9 +10,9 @@
 用法（单卡独占；ckpt 可为名字或本地路径）::
 
     CUDA_VISIBLE_DEVICES=0 python -u scripts/bench_lossless.py \
-      --greedy-ckpt L27_g12_80M_s1 \
+      --greedy-ckpt L27_g12_150M_s1 \
       --greedy-ckpt L27_final15_150M_s1 \
-      --kl-ckpt L27_g12_80M_s1
+      --kl-ckpt L27_g12_150M_s1
 """
 
 from __future__ import annotations

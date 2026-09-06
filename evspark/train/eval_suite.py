@@ -8,7 +8,7 @@ DRAFTER_NAME / RESULTS / PROMPT_PACK）再调 ``main()``。prompt 包默认
 用法（ckpt 可为已发布名字或本地 .pt 路径）::
 
     CUDA_VISIBLE_DEVICES=0 python -m evspark.train.eval_suite \
-      --ckpt L27_g12_80M_s1 --tag repro_s1 --n-tokens 1024 --modes smoke,grid
+      --ckpt L27_g12_150M_s1 --tag repro_s1 --n-tokens 1024 --modes smoke,grid
     # 结果落盘 benchmarks/eval_suite_<tag>.json
 """
 

@@ -4,7 +4,7 @@ One-line usage::
 
     from evspark import EvSpark
 
-    es = EvSpark.load("L27_g12_80M_s1")          # auto-downloads the drafter ckpt
+    es = EvSpark.load("L27_g12_150M_s1")          # auto-downloads the drafter ckpt
     res = es.generate("ACGTACGT...", n_tokens=1024)   # sampling (T=1.0, top_k=4)
     print(res.text, f"{res.tok_s:.1f} tok/s", f"tau={res.mean_tau:.2f}")
 
@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-DEFAULT_CKPT = "L27_g12_80M_s1"
+DEFAULT_CKPT = "L27_g12_150M_s1"
 
 
 def clean_prompt(seq: str) -> str:

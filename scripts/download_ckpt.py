@@ -5,8 +5,8 @@ Thin CLI over ``evspark.checkpoints`` — see that module for details.
 Checkpoints land in ``$EVSPARK_CKPT_DIR`` or ``~/.cache/evspark/checkpoints``.
 
 Usage:
-    python scripts/download_ckpt.py L27_g12_80M_s1                 # HF first, ModelScope fallback
-    python scripts/download_ckpt.py L27_g12_80M_s1 --source modelscope
+    python scripts/download_ckpt.py L27_g12_150M_s1                 # HF first, ModelScope fallback
+    python scripts/download_ckpt.py L27_g12_150M_s1 --source modelscope
     python scripts/download_ckpt.py --list
 """
 

@@ -36,7 +36,7 @@ import evalpack
 from evspark.checkpoints import default_ckpt_dir
 
 RESULTS = str(Path(__file__).resolve().parents[1] / "benchmarks" / "eval_suite.json")
-CKPT = str(default_ckpt_dir() / "L27_g12_80M_s1.pt")
+CKPT = str(default_ckpt_dir() / "L27_g12_150M_s1.pt")
 STEP9_JSON = str(Path(__file__).resolve().parents[1] / "benchmarks" / "step9_layer_gamma_sweep.json")
 PROMPT_PACK = str(evalpack.PROMPT_PACK)  # eval_suite 可覆盖指向其它 prompt 包
 
