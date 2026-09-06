@@ -307,7 +307,7 @@ def test_serial_sample_decode_gamma_prefix_consistency():
     )
 
 
-G12_CKPT = default_ckpt_dir() / "L27_g12_80M_s1.pt"
+G12_CKPT = default_ckpt_dir() / "L27_g12_150M_s1.pt"
 
 
 @pytest.mark.skipif(not G12_CKPT.is_file(), reason="需要已下载的 γ12 ckpt（evspark ckpt 缓存）")

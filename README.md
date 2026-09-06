@@ -154,10 +154,9 @@ first and falls back to ModelScope automatically):
 |---|---:|---:|---:|---|
 | `L27_g12_150M_s1` / `_s2` | 12 | 150M | **3.27×** / 2.96× | flagship |
 | `L27_g12_30M_s1` / `_s2` | 12 | 30M | 3.15× / 2.82× | "~1 GPU-hour" cost-optimal cell |
-| `L27_g12_80M_s1` / `_s2` | 12 | 80M | 3.16× / 2.79× | mid-plateau cell (ModelScope only) |
-| `L27_final15_150M_s1` / `_s2` | 7 | 150M | 2.81× / 2.60× | legacy γ=7 reference (ModelScope only) |
 
-HF hosts the slim set (flagship + cost-optimal); ModelScope hosts the full set.
+Both hubs host the same slim set (flagship + cost-optimal cell); other grid
+cells from the paper are internal training artifacts and are not published.
 All drafters: single injection layer L27, d_model=1024, distilled offline from
 frozen Evo2 hidden states; the target model is never fine-tuned.
 

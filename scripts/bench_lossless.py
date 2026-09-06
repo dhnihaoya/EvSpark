@@ -11,7 +11,7 @@
 
     CUDA_VISIBLE_DEVICES=0 python -u scripts/bench_lossless.py \
       --greedy-ckpt L27_g12_150M_s1 \
-      --greedy-ckpt L27_final15_150M_s1 \
+      --greedy-ckpt L27_g12_150M_s1 \
       --kl-ckpt L27_g12_150M_s1
 """
 

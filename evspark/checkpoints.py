@@ -16,12 +16,8 @@ from pathlib import Path
 KNOWN_CKPTS = [
     "L27_g12_150M_s1",     # 旗舰：γ=12，150M 蒸馏位置，all-48 3.27× / real-43 2.96×
     "L27_g12_150M_s2",     # 旗舰，第二种子
-    "L27_g12_80M_s1",      # 平台期中段格（3.16×）
-    "L27_g12_80M_s2",
     "L27_g12_30M_s1",      # 1 GPU 时成本最优格，3.15×
     "L27_g12_30M_s2",
-    "L27_final15_150M_s1", # legacy γ=7 参照（2.81× / 2.60×）
-    "L27_final15_150M_s2",
 ]
 
 HF_REPO = os.environ.get("EVSPARK_HF_REPO", "dinghhhhhhhhhhhhhhh/EvSpark")
