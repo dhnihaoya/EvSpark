@@ -26,23 +26,26 @@ inference, evaluation, and drafter training.
 ## 2. Quick functional test
 
 ```bash
-python scripts/demo.py --ckpt L27_g12_80M_s1 --greedy   # losslessness + speedup
+python scripts/demo.py --ckpt L27_g12_150M_s1 --greedy   # losslessness + speedup
 python -m pytest tests -q                                # CPU suite; GPU tests auto-skip
 ```
 
 ## 3. Evaluation suite (24 prompts × 1024 tokens)
 
-This is the protocol behind every speedup number in the paper. The exact
-24-prompt suite ships inside the package as `evspark/data/eval_prompts_24.json`
-(self-contained sequences; regions: bacterial/viral coding, human intergenic,
-human repeats, OpenGenome2 domain slices, IMG-VR coding, random ACGT), so the
-evaluation needs **no external corpus**. Checkpoints can be given by name
-(see `python scripts/download_ckpt.py --list`) or as a local `.pt` path.
+This is the protocol behind every speedup number in the paper. The suite that
+ships inside the package, `evspark/data/eval_prompts_24.json`, is a
+self-contained 24-prompt subset of the paper's v2 48-prompt suite (43 real +
+5 random; the full pack lives in the main repository as
+`benchmarks/step18_suite_v2.json`). Regions: bacterial/viral coding, human
+intergenic, human repeats, OpenGenome2 domain slices, IMG-VR coding, random
+ACGT — the evaluation needs **no external corpus**. Checkpoints can be given
+by name (see `python scripts/download_ckpt.py --list`) or as a local `.pt`
+path.
 
 ```bash
-python scripts/download_ckpt.py L27_g12_80M_s1 L27_g12_80M_s2
+python scripts/download_ckpt.py L27_g12_150M_s1 L27_g12_150M_s2
 CUDA_VISIBLE_DEVICES=0 python -u -m evspark.train.eval_suite \
-  --ckpt L27_g12_80M_s1 --tag repro_s1 --n-tokens 1024 --modes smoke,grid
+  --ckpt L27_g12_150M_s1 --tag repro_s1 --n-tokens 1024 --modes smoke,grid
 # results land in benchmarks/eval_suite_repro_s1.json
 ```
 
@@ -96,7 +99,7 @@ CUDA_VISIBLE_DEVICES=0 python -u -m evspark.train.eval_suite \
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -u scripts/bench_lossless.py \
-  --greedy-ckpt L27_g12_80M_s1
+  --greedy-ckpt L27_g12_150M_s1
 ```
 
 Expected: 0 non-tie divergences vs native greedy; occasional bf16 tie-flips are

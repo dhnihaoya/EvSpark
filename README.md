@@ -4,7 +4,7 @@
 
 ![EvSpark](assets/fig1_hero.png)
 
-EvSpark accelerates single-stream Evo2 7B generation by **2.9–3.2×** with a small
+EvSpark accelerates single-stream Evo2 7B generation by **2.8–3.3×** with a small
 distilled drafter that proposes γ tokens per round, while staying **provably
 lossless**: every block is verified against the target model's distribution
 (rejection sampling), and greedy output is token-for-token identical to native
@@ -30,19 +30,23 @@ KV-cache rollback does not apply. EvSpark contributes:
 
 ## Results at a glance
 
-Evo2 7B (bf16), single stream, RTX 4090. Suite = 24 genomic prompts × 1024 tokens,
-dual training seeds.
+Evo2 7B (bf16), single stream, RTX 4090. Suite = 48 genomic prompts (43 real +
+5 random) × 1024 tokens, three training seeds. The packaged prompt pack
+(`evspark/data/eval_prompts_24.json`) is a self-contained 24-prompt subset of
+this v2 suite.
 
 | Metric | Value |
 |---|---|
-| Suite mean speedup, flagship drafter (γ=12, 80M distill tokens) | **3.16×** |
-| Suite mean, main-table drafter (γ=7, 150M) | 2.89× / 2.87× (s1/s2) |
-| Long context: *E. coli* genome, 262k | 2.18× / 2.18× |
-| Long context: *B. subtilis*, 262k | 2.07× |
+| Suite mean speedup, flagship drafter (γ=12, 150M distill tokens), all-48 | **3.27×** |
+| — flagship, real-sequence subset (43 prompts) | 2.96× |
+| Suite mean, cost-optimal drafter (γ=12, 30M) | 3.15× / 2.82× (all-48 / real-43) |
+| Suite mean, legacy γ=7 drafter (150M) | 2.81× / 2.60× (all-48 / real-43) |
+| Long context: *E. coli* genome, 262k | 1.97× / 2.28× / 2.43× (3 seeds) |
+| Long context: *B. subtilis*, 262k | 1.84× / 2.05× |
 | Speedup vs context length | flat from 1k to 51k (GTDB 3-contig) |
-| Greedy losslessness, 24 prompts × 4 checkpoints | **0 non-tie divergences** |
+| Greedy losslessness, 48 prompts × 6 checkpoints | **0 non-tie divergences** |
 | Sampling equivalence | KL ≤ 1.6× of a native-vs-native floor on 10 prompts |
-| Drafter training cost, γ=12@30M (→ 3.03×) | **~1.06 GPU-hour** on one 4090 |
+| Drafter training cost, γ=12@30M (→ 3.15×) | **~1.06 GPU-hour** on one 4090 |
 | Baselines (same protocol): Markov-k5 / prompt-lookup k=2, k=3 | 2.65× / 1.24× / 1.30× |
 
 Full protocol, per-region table, ablations (injection layer, drafter width, γ,
@@ -75,22 +79,22 @@ unreachable.
 
 ```bash
 # 1. get a drafter checkpoint (~160 MB; HF first, ModelScope fallback)
-python scripts/download_ckpt.py L27_g12_80M_s1
+python scripts/download_ckpt.py L27_g12_150M_s1
 
 # 2. run the demo: speculative vs native on a 1 kb lacZ prompt,
 #    greedy mode asserts token-for-token equality
-python scripts/demo.py --ckpt L27_g12_80M_s1 --greedy
+python scripts/demo.py --ckpt L27_g12_150M_s1 --greedy
 #    sampling mode measures wall-clock speedup:
-python scripts/demo.py --ckpt L27_g12_80M_s1 --n-tokens 1024
+python scripts/demo.py --ckpt L27_g12_150M_s1 --n-tokens 1024
 
 # 3. your own sequence
-python scripts/demo.py --ckpt L27_g12_80M_s1 --prompt-file my_genome_window.fa
+python scripts/demo.py --ckpt L27_g12_150M_s1 --prompt-file my_genome_window.fa
 ```
 
 Expected output (single RTX 4090, greedy, 128 tokens):
 
 ```
-[evspark] drafter=L27_g12_80M_s1.pt layers=['blocks.27'] gamma=12
+[evspark] drafter=L27_g12_150M_s1.pt layers=['blocks.27'] gamma=12
 [demo] prompt=1024 bp, generating 1024 tokens (sampling T=1.0 top_k=4)
 
   native      :   23.51 s  (  43.6 tok/s)
@@ -98,10 +102,11 @@ Expected output (single RTX 4090, greedy, 128 tokens):
   speedup     : 2.61x   (mean accepted tau=6.04, rounds=171)
 ```
 Single-prompt demo on a human chr21 intergenic window. Speedup is
-region-dependent: bacterial coding is the hardest cell (~1.1–1.3×), intergenic
-and random regions reach 4–6×; the 24-prompt suite mean is 3.16×. Greedy mode
-on coding regions degenerates into repeats (a known property of greedy DNA
-decoding) — use it for the exact-match check, not as a speed showcase.
+region-dependent: bacterial coding is the hardest region, while random regions
+reach 5.95×; the v2 suite means are **3.27×** over all 48 prompts and 2.96×
+over the 43 real-sequence prompts. Greedy mode on coding regions degenerates
+into repeats (a known property of greedy DNA decoding) — use it for the
+exact-match check, not as a speed showcase.
 
 ## Use it as a library
 
@@ -110,7 +115,7 @@ From the repo root (or anywhere after `pip install -e .`):
 ```python
 from evspark import EvSpark
 
-with EvSpark.load("L27_g12_80M_s1") as es:      # auto-downloads the drafter ckpt
+with EvSpark.load("L27_g12_150M_s1") as es:      # auto-downloads the drafter ckpt
     res = es.generate("ACGTACGT...", n_tokens=1024)   # sampling (T=1.0, top_k=4)
     print(res.text, f"{res.tok_s:.1f} tok/s, tau={res.mean_tau:.2f}")
 
@@ -125,16 +130,31 @@ path, or another Evo2 model via `model_name=`. Greedy output is token-for-token
 identical to native decoding; sampling follows the same distribution
 (rejection-sampled verification, see paper).
 
+### Decode-time γ without retraining
+
+One checkpoint serves any decode-time draft length γ′ up to its training γ:
+the drafter trunk is strictly causal over draft positions, so γ′ < γ is an
+exact prefix computation — losslessness is unaffected, and measured speedup
+grows monotonically with γ′. Just pass it per call:
+
+```python
+res = es.generate(prompt, n_tokens=1024, gamma=8)   # γ′=8 from a γ=12 checkpoint
+```
+
+`python -m evspark.train.eval_suite --gamma N` exposes the same knob for
+evaluation.
+
 ## Checkpoints
 
 Published on [Hugging Face](https://huggingface.co/dinghhhhhhhhhhhhhhh/EvSpark) and [ModelScope](https://www.modelscope.cn/models/dinghao1120/EvSpark),
 loadable directly via `NeuralDraftModel.from_checkpoint`:
 
-| Checkpoint | γ | Distill budget | Suite speedup | Note |
+| Checkpoint | γ | Distill budget | Suite speedup (all-48 / real-43) | Note |
 |---|---:|---:|---:|---|
-| `L27_g12_80M_s1` / `_s2` | 12 | 80M | **3.16×** (mean of seeds) | flagship |
-| `L27_g12_30M_s1` / `_s2` | 12 | 30M | 3.03× | "~1 GPU-hour" cell |
-| `L27_final15_150M_s1` / `_s2` | 7 | 150M | 2.89× / 2.87× | main-table model |
+| `L27_g12_150M_s1` / `_s2` | 12 | 150M | **3.27×** / 2.96× | flagship |
+| `L27_g12_80M_s1` / `_s2` | 12 | 80M | 3.16× / 2.79× | mid-plateau cell |
+| `L27_g12_30M_s1` / `_s2` | 12 | 30M | 3.15× / 2.82× | "~1 GPU-hour" cost-optimal cell |
+| `L27_final15_150M_s1` / `_s2` | 7 | 150M | 2.81× / 2.60× | legacy γ=7 reference |
 
 All drafters: single injection layer L27, d_model=1024, distilled offline from
 frozen Evo2 hidden states; the target model is never fine-tuned.
@@ -150,7 +170,8 @@ evspark/            the pip-installable package
   train/            drafter definition (drafter.py), corpus pools (corpora.py),
                     training mix (mix.py), offline distillation
                     (train_drafter.py), evaluation suite (eval_suite.py)
-  data/eval_prompts_24.json   the paper's 24-prompt suite (self-contained)
+  data/eval_prompts_24.json   self-contained 24-prompt subset of the paper's
+                    v2 48-prompt evaluation suite
 scripts/            CLIs & dev tools: demo.py, download_ckpt.py, evalpack.py,
                     bench_neural_c5.py, bench_lossless.py, dump_c1_dataset.py,
                     launch_ddp.sh
@@ -161,8 +182,9 @@ docs/reproduce.md   full evaluation & training reproduction chain
 ## Reproduce the paper numbers
 
 See [docs/reproduce.md](docs/reproduce.md): hidden-state dump → drafter training
-(single GPU or DDP) → 24-prompt evaluation suite. The evaluation runs entirely
-off the packaged prompt suite — no external corpus needed.
+(single GPU or DDP) → evaluation suite. The evaluation runs entirely off the
+packaged 24-prompt subset of the paper's v2 48-prompt suite — no external
+corpus needed.
 
 ## Citation
 

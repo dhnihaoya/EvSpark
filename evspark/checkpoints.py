@@ -14,11 +14,13 @@ from pathlib import Path
 
 # 已发布 checkpoint（说明见 README §Checkpoints）
 KNOWN_CKPTS = [
-    "L27_g12_80M_s1",      # 旗舰：gamma=12，80M 蒸馏位置（套件均值 3.16x）
-    "L27_g12_80M_s2",      # 旗舰，第二种子
-    "L27_g12_30M_s1",      # 预算格：~1 GPU 时训练，3.03x
+    "L27_g12_150M_s1",     # 旗舰：γ=12，150M 蒸馏位置，all-48 3.27× / real-43 2.96×
+    "L27_g12_150M_s2",     # 旗舰，第二种子
+    "L27_g12_80M_s1",      # 平台期中段格（3.16×）
+    "L27_g12_80M_s2",
+    "L27_g12_30M_s1",      # 1 GPU 时成本最优格，3.15×
     "L27_g12_30M_s2",
-    "L27_final15_150M_s1", # gamma=7 主表模型（2.89x / 2.87x）
+    "L27_final15_150M_s1", # legacy γ=7 参照（2.81× / 2.60×）
     "L27_final15_150M_s2",
 ]
 
