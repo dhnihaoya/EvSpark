@@ -1,5 +1,8 @@
 # Reproduction guide
 
+Paper: [EvSpark: Lossless Speculative Decoding for Hybrid DNA Foundation Models](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1)
+([DOI: 10.64898/2026.09.02.749017](https://doi.org/10.64898/2026.09.02.749017)).
+
 End-to-end chain: environment → Evo2 weights → (optional) hidden-state dump →
 drafter training → evaluation. Everything below assumes the repo root as CWD and
 the conda env from [README §Install](../README.md). No `pip install` of EvSpark

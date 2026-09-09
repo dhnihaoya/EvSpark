@@ -2,6 +2,11 @@
 
 **Lossless speculative decoding for Evo2 — StripedHyena2 hybrid DNA foundation models**
 
+[**Paper (bioRxiv)**](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1)
+· [DOI](https://doi.org/10.64898/2026.09.02.749017)
+· [Hugging Face](https://huggingface.co/dinghhhhhhhhhhhhhhh/EvSpark)
+· [ModelScope](https://www.modelscope.cn/models/dinghao1120/EvSpark)
+
 ![EvSpark](assets/fig1_hero.png)
 
 EvSpark accelerates single-stream Evo2 7B generation by **2.8–3.3×** with a small
@@ -50,7 +55,8 @@ this v2 suite.
 | Baselines (same protocol): Markov-k5 / prompt-lookup k=2, k=3 | 2.65× / 1.24× / 1.30× |
 
 Full protocol, per-region table, ablations (injection layer, drafter width, γ,
-distill budget) and cost model are in the paper (link TBD).
+distill budget) and cost model are in the
+[paper](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1).
 
 ## Install
 
@@ -189,9 +195,18 @@ corpus needed.
 
 ## Citation
 
+```bibtex
+@article{ding2026evspark,
+  title   = {EvSpark: Lossless Speculative Decoding for Hybrid DNA Foundation Models},
+  author  = {Ding, Hao and Wu, Nannan and Qiu, Tianyi},
+  journal = {bioRxiv},
+  year    = {2026},
+  doi     = {10.64898/2026.09.02.749017},
+  url     = {https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1}
+}
 ```
-TBD (preprint in preparation)
-```
+
+Preprint: [https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1)
 
 ## License
 

@@ -21,6 +21,10 @@ test = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/dhnihaoya/EvSpark"
+Paper = "https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1"
+DOI = "https://doi.org/10.64898/2026.09.02.749017"
+HuggingFace = "https://huggingface.co/dinghhhhhhhhhhhhhhh/EvSpark"
+ModelScope = "https://www.modelscope.cn/models/dinghao1120/EvSpark"
 
 [tool.setuptools.packages.find]
 include = ["evspark*"]
