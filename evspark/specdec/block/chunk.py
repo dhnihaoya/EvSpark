@@ -187,9 +187,13 @@ def _inner_iir_chunk(cascade, x1, x2, v, inference_params, dtype, stash=None):
     x_s = torch.fft.fft(x1v, n=fft_size)  # [B, H, 2γ]
     state_s = torch.fft.fft(pows_zis, n=fft_size)  # [H, S, 2γ]
     zis = torch.fft.ifft(x_s[:, :, None, :] * state_s[None], n=fft_size)[..., :gamma]
+    # vortex prefill_via_modal_fft 同样 ifft 后 .to(fp32) 丢掉虚部；虚部是
+    # 实信号 FFT 的数值噪声。不取 .real 会把 state 写成 complex64，1B 上
+    # |s|~1e11 时虚部可到 1e2，污染后续 step。
+    zis = zis.real.contiguous()
 
     s_all = zis + s0[..., None] * pows_zir[None]  # [B, H, S, γ]，fp32
-    inference_params.state_dict[layer_idx] = s_all[..., -1]
+    inference_params.state_dict[layer_idx] = s_all[..., -1].to(torch.float32)
     if stash is not None:
         stash.s_all[layer_idx] = s_all
 
