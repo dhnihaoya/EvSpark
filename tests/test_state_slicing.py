@@ -346,3 +346,354 @@ def test_truncation_round_slices(mini_model):
         snapshot_states(ip_ref, kv_len=kv_len),
         "截断轮后状态",
     )
+
+
+def test_slice_per_sequence_hyena(mini_model):
+    """D4a：B=2 块前向后按不同 k 切片，各序列 Hyena 态对拍独立重放。"""
+    import torch
+
+    from evspark.specdec.block.driver import (
+        block_forward,
+        clone_inference_params,
+        collapse_inference_params,
+        expand_inference_params,
+        get_seqlen_offset,
+        prefill,
+        snapshot_states,
+    )
+    from evspark.specdec.block.slice import slice_states_to_accept
+    from test_block_forward import ACGTN_IDS, PREFIX_LEN
+
+    prev = mini_model.config.max_batch_size
+    mini_model.config.max_batch_size = 2
+    gamma = 4
+    ks = np.array([0, 3], dtype=np.int64)
+    rng = np.random.default_rng(SEED_CHUNK + 9)
+    prompt_1 = torch.tensor(
+        rng.choice(ACGTN_IDS, size=PREFIX_LEN), dtype=torch.long, device="cuda:0"
+    )[None]
+    drafts = torch.tensor(
+        rng.choice(ACGTN_IDS, size=(2, gamma + 1)), dtype=torch.long, device="cuda:0"
+    )
+    drafts[:, 0] = prompt_1[0, -1]
+    try:
+        with torch.inference_mode():
+            ip1 = mini_model.initialize_inference_params(max_seqlen=PREFIX_LEN + 64)
+            prefill(mini_model, prompt_1[:, :-1], ip1)
+            ip_b = clone_inference_params(ip1)
+            expand_inference_params(ip_b, 2)
+            _, stash = block_forward(mini_model, drafts, ip_b, retain=True)
+            # 迷你模型是慢路径（use_flash_attn=False），变长切片会触发守卫；
+            # 本测试只拍 Hyena 态、随后即 collapse，不变长读 KV，显式旁路
+            stash.flash_attn = True
+            slice_states_to_accept(ip_b, stash, ks)
+            snap_b = snapshot_states(
+                ip_b, kv_len=PREFIX_LEN - 1 + int(ks.max()) + 1, batch_size=2
+            )
+            for b, kb in enumerate(ks.tolist()):
+                ip_ref = clone_inference_params(ip1)
+                block_forward(mini_model, drafts[b : b + 1, : kb + 1], ip_ref)
+                snap_r = snapshot_states(ip_ref, kv_len=PREFIX_LEN - 1 + kb + 1, batch_size=1)
+
+                def _cmp(a, bdict, path):
+                    if isinstance(a, dict):
+                        for kk in a:
+                            _cmp(a[kk], bdict[kk], f"{path}/{kk}")
+                    else:
+                        ta = a[b] if a.shape[0] == 2 else a
+                        d = float((ta.float() - bdict.float()).abs().max())
+                        assert d < TOL, f"b={b} k={kb} {path} max|diff|={d:.3e}"
+
+                for key in ("hcl", "hcm", "hcs"):
+                    _cmp(snap_b[key], snap_r[key], key)
+            # 收回 k 较短的胜出路径 0：offset 须收到 L0+k+1，不是 max(k)
+            collapse_inference_params(ip_b, 0)
+            want = PREFIX_LEN - 1 + int(ks[0]) + 1
+            assert get_seqlen_offset(ip_b) == want, (
+                f"collapse 后 offset={get_seqlen_offset(ip_b)} ≠ 胜出长度 {want}"
+            )
+            ip_ref0 = clone_inference_params(ip1)
+            block_forward(mini_model, drafts[0:1, : int(ks[0]) + 1], ip_ref0)
+            snap_c = snapshot_states(ip_b, kv_len=want, batch_size=1)
+            snap_r0 = snapshot_states(ip_ref0, kv_len=want, batch_size=1)
+
+            def _cmp1(a, bdict, path):
+                if isinstance(a, dict):
+                    for kk in a:
+                        _cmp1(a[kk], bdict[kk], f"{path}/{kk}")
+                else:
+                    d = float((a.float() - bdict.float()).abs().max())
+                    assert d < TOL, f"collapse b=0 {path} max|diff|={d:.3e}"
+
+            for key in ("hcl", "hcm", "hcs"):
+                _cmp1(snap_c[key], snap_r0[key], key)
+    finally:
+        mini_model.config.max_batch_size = prev
+
+
+def test_greedy_short_prefix_slice(mini_model):
+    """64-token 前缀（HCM 短窗）slice 循环贪心 vs 原生逐步。"""
+    import torch
+
+    from evspark.specdec.block.loop import native_greedy_reference, speculative_generate
+    from evspark.specdec.drafts import IdentityDraftModel
+
+    prefix = 64
+    gamma = 4
+    n_tokens = 32
+    rng = np.random.default_rng(SEED_PROMPT + 64)
+    prompt = _prompt_ids(torch, rng, prefix)
+    native, _ip, _ = native_greedy_reference(mini_model, prompt, n_tokens)
+    spec = speculative_generate(
+        mini_model,
+        IdentityDraftModel(),
+        prompt,
+        n_tokens,
+        gamma,
+        greedy=True,
+        rng=np.random.default_rng(0),
+        rollback="slice",
+    )
+    np.testing.assert_array_equal(spec.emitted_ids, native)
+    assert any(r.k < gamma for r in spec.rounds_log)
+
+
+def test_slice_vs_replay_short_prefix(mini_model):
+    """前缀 64 < HCM 窗：短 cat 切片 vs 重放。"""
+    import torch
+
+    from evspark.specdec.block.driver import (
+        block_forward,
+        clone_inference_params,
+        get_seqlen_offset,
+        prefill,
+        snapshot_states,
+    )
+    from evspark.specdec.block.slice import slice_states_to_accept
+
+    prefix = 64
+    gamma = 4
+    rng = np.random.default_rng(SEED_CHUNK + 11)
+    prompt = _prompt_ids(torch, rng, prefix)
+    chunk = _prompt_ids(torch, rng, gamma + 1)
+    with torch.inference_mode():
+        ip0 = mini_model.initialize_inference_params(max_seqlen=prefix + 64)
+        prefill(mini_model, prompt, ip0)
+        snap = clone_inference_params(ip0)
+        ip_full = clone_inference_params(ip0)
+        _logits, stash = block_forward(mini_model, chunk, ip_full, retain=True)
+        assert stash.chunk_len == gamma + 1
+        hcm_cat = next(c for i, c in stash.x1v_cat.items() if stash.k_inner[i] >= 128)
+        assert hcm_cat.shape[-1] == prefix + gamma + 1  # S=64 < 127，cat 未补零
+        for k in (0, 1, 2, gamma):
+            ip_slice = clone_inference_params(ip_full)
+            slice_states_to_accept(ip_slice, stash, k)
+            ip_replay = clone_inference_params(snap)
+            block_forward(mini_model, chunk[:, : k + 1], ip_replay)
+            kv_len = prefix + k + 1
+            assert get_seqlen_offset(ip_slice) == kv_len
+            _assert_states_close(
+                snapshot_states(ip_slice, kv_len=kv_len),
+                snapshot_states(ip_replay, kv_len=kv_len),
+                f"短前缀 k={k} 切片 vs 重放",
+            )
+
+
+def test_slice_per_sequence_slow_attention_guard(mini_model):
+    """慢路径（use_flash_attn=False）下变长 k 切片必须被拒绝（stale KV 风险）。"""
+    import torch
+
+    from evspark.specdec.block.driver import (
+        block_forward,
+        clone_inference_params,
+        expand_inference_params,
+        prefill,
+    )
+    from evspark.specdec.block.slice import slice_states_to_accept
+    from test_block_forward import ACGTN_IDS, PREFIX_LEN
+
+    prev = mini_model.config.max_batch_size
+    mini_model.config.max_batch_size = 2
+    try:
+        rng = np.random.default_rng(SEED_CHUNK + 21)
+        prompt = torch.tensor(
+            rng.choice(ACGTN_IDS, size=(1, PREFIX_LEN)), dtype=torch.long, device="cuda:0"
+        )
+        chunk = torch.tensor(
+            rng.choice(ACGTN_IDS, size=(2, GAMMA + 1)), dtype=torch.long, device="cuda:0"
+        )
+        with torch.inference_mode():
+            ip = mini_model.initialize_inference_params(max_seqlen=PREFIX_LEN + 64)
+            prefill(mini_model, prompt[:, :-1], ip)
+            expand_inference_params(ip, 2)
+            _, stash = block_forward(mini_model, chunk, ip, retain=True)
+            assert stash.flash_attn is False  # 迷你模型慢路径
+            with pytest.raises(ValueError, match="flash_attn"):
+                slice_states_to_accept(ip, stash, np.array([0, 3], dtype=np.int64))
+            # 标量 k（一致）不受守卫限制
+            slice_states_to_accept(ip, stash, 2)
+    finally:
+        mini_model.config.max_batch_size = prev
+
+
+def test_slice_per_sequence_hcs_width_mismatch_raises(mini_model):
+    """前缀短于 HCS 窗且变长切片宽度不一：非 flip 核禁止零填，须报错。"""
+    import torch
+
+    from evspark.specdec.block.driver import (
+        block_forward,
+        clone_inference_params,
+        expand_inference_params,
+        prefill,
+    )
+    from evspark.specdec.block.slice import slice_states_to_accept
+    from test_block_forward import ACGTN_IDS
+
+    prev = mini_model.config.max_batch_size
+    mini_model.config.max_batch_size = 2
+    prefix = 4  # HCS（K=7）S=3 < 6；外层满窗不受影响
+    gamma = 4
+    try:
+        rng = np.random.default_rng(SEED_CHUNK + 22)
+        prompt = torch.tensor(
+            rng.choice(ACGTN_IDS, size=(1, prefix)), dtype=torch.long, device="cuda:0"
+        )
+        chunk = torch.tensor(
+            rng.choice(ACGTN_IDS, size=(2, gamma + 1)), dtype=torch.long, device="cuda:0"
+        )
+        with torch.inference_mode():
+            ip = mini_model.initialize_inference_params(max_seqlen=prefix + 64)
+            prefill(mini_model, prompt[:, :-1], ip)
+            expand_inference_params(ip, 2)
+            _, stash = block_forward(mini_model, chunk, ip, retain=True)
+            stash.flash_attn = True  # 绕过慢路径守卫，专测 HCS 变宽分支
+            with pytest.raises(ValueError, match="不同 FIR 状态长度"):
+                slice_states_to_accept(ip, stash, np.array([0, 2], dtype=np.int64))
+    finally:
+        mini_model.config.max_batch_size = prev
+
+
+def test_slice_per_sequence_hcm_zeropad(mini_model):
+    """HCM（flip）变长切片宽度不一左零填：前导零 + 尾部=独立重放 + 下游 ≡ 真短态。"""
+    import torch
+
+    from evspark.specdec.block.driver import (
+        block_forward,
+        clone_inference_params,
+        collapse_inference_params,
+        expand_inference_params,
+        get_seqlen_offset,
+        prefill,
+        step_forward_reference,
+    )
+    from evspark.specdec.block.slice import slice_states_to_accept
+    from test_block_forward import ACGTN_IDS
+
+    prev = mini_model.config.max_batch_size
+    mini_model.config.max_batch_size = 2
+    prefix = 64  # prefill 63 位 → HCM S=63 < 127；HCS/外层满窗
+    gamma = 4
+    ks = np.array([0, 3], dtype=np.int64)
+    rng = np.random.default_rng(SEED_CHUNK + 31)
+    prompt = torch.tensor(
+        rng.choice(ACGTN_IDS, size=(1, prefix)), dtype=torch.long, device="cuda:0"
+    )
+    drafts = torch.tensor(
+        rng.choice(ACGTN_IDS, size=(2, gamma + 1)), dtype=torch.long, device="cuda:0"
+    )
+    drafts[:, 0] = prompt[0, -1]
+    try:
+        with torch.inference_mode():
+            ip1 = mini_model.initialize_inference_params(max_seqlen=prefix + 64)
+            prefill(mini_model, prompt[:, :-1], ip1)  # L0 = 63
+            ip_b = clone_inference_params(ip1)
+            expand_inference_params(ip_b, 2)
+            _, stash = block_forward(mini_model, drafts, ip_b, retain=True)
+            stash.flash_attn = True  # 迷你模型慢路径；只拍 Hyena 态 + collapse 后单序列下游
+            slice_states_to_accept(ip_b, stash, ks)
+
+            layer_idx = next(i for i, kk in stash.k_inner.items() if kk >= 128)
+            state = ip_b["hcm"].fir_inner_state_dict[layer_idx]
+            width0 = 63 + int(ks[0]) + 1  # 64
+            width1 = 63 + int(ks[1]) + 1  # 67
+            assert int(state.shape[-1]) == width1, "变长须零填到对齐宽度"
+            pad = width1 - width0
+            assert float(state[0, ..., :pad].abs().max()) == 0.0, "前导须为零填"
+            # 尾部窗口与独立重放（真短态）逐项一致
+            for b, kb in enumerate(ks.tolist()):
+                ip_ref = clone_inference_params(ip1)
+                block_forward(mini_model, drafts[b : b + 1, : kb + 1], ip_ref)
+                ref = ip_ref["hcm"].fir_inner_state_dict[layer_idx]
+                w = 63 + kb + 1
+                assert int(ref.shape[-1]) == w
+                d = float((state[b, ..., -w:].float() - ref[0].float()).abs().max())
+                assert d < TOL, f"b={b} k={kb} HCM 零填窗口尾部 {w} 位 max|diff|={d:.3e}"
+            # 下游等价：collapse 到被零填的胜出路径 0 再走一块，
+            # 与「真短态 → 逐步」参照的 logits 全等 ⇒ 零填 ≡ 真短态
+            collapse_inference_params(ip_b, 0)
+            assert get_seqlen_offset(ip_b) == 63 + int(ks[0]) + 1
+            chunk2 = torch.tensor(
+                rng.choice(ACGTN_IDS, size=(1, gamma)), dtype=torch.long, device="cuda:0"
+            )
+            ip_pad_step = clone_inference_params(ip_b)
+            logits_pad = block_forward(mini_model, chunk2, ip_b)
+            logits_pad_step = step_forward_reference(mini_model, chunk2, ip_pad_step)
+            d = float((logits_pad.float() - logits_pad_step.float()).abs().max())
+            assert d < TOL, f"零填态块前向 vs 逐步 max|diff|={d:.3e}"
+            ip_true = clone_inference_params(ip1)
+            block_forward(mini_model, drafts[0:1, : int(ks[0]) + 1], ip_true)
+            logits_true = step_forward_reference(mini_model, chunk2, ip_true)
+            d2 = float((logits_pad.float() - logits_true.float()).abs().max())
+            assert d2 < TOL, f"零填态下游 vs 真短态逐步 max|diff|={d2:.3e}"
+    finally:
+        mini_model.config.max_batch_size = prev
+
+
+def test_collapse_nonzero_winner(mini_model):
+    """D4b：多候选切片后 collapse 到 winner=1，KV 行拷贝与 Hyena 态对拍 B=1 参照。"""
+    import torch
+
+    from evspark.specdec.block.driver import (
+        block_forward,
+        clone_inference_params,
+        collapse_inference_params,
+        expand_inference_params,
+        get_seqlen_offset,
+        prefill,
+        snapshot_states,
+    )
+    from evspark.specdec.block.slice import slice_states_to_accept
+    from test_block_forward import ACGTN_IDS, PREFIX_LEN
+
+    prev = mini_model.config.max_batch_size
+    mini_model.config.max_batch_size = 2
+    gamma = 4
+    k = 2
+    rng = np.random.default_rng(SEED_CHUNK + 41)
+    prompt = torch.tensor(
+        rng.choice(ACGTN_IDS, size=(1, PREFIX_LEN)), dtype=torch.long, device="cuda:0"
+    )
+    drafts = torch.tensor(
+        rng.choice(ACGTN_IDS, size=(2, gamma + 1)), dtype=torch.long, device="cuda:0"
+    )
+    drafts[:, 0] = prompt[0, -1]
+    try:
+        with torch.inference_mode():
+            ip1 = mini_model.initialize_inference_params(max_seqlen=PREFIX_LEN + 64)
+            prefill(mini_model, prompt[:, :-1], ip1)
+            ip_b = clone_inference_params(ip1)
+            expand_inference_params(ip_b, 2)
+            _, stash = block_forward(mini_model, drafts, ip_b, retain=True)
+            slice_states_to_accept(ip_b, stash, k)  # 标量：慢路径无风险
+            collapse_inference_params(ip_b, 1)
+            kv_len = PREFIX_LEN - 1 + k + 1
+            assert get_seqlen_offset(ip_b) == kv_len
+            ip_ref = clone_inference_params(ip1)
+            block_forward(mini_model, drafts[1:2, : k + 1], ip_ref)
+            _assert_states_close(
+                snapshot_states(ip_b, kv_len=kv_len),
+                snapshot_states(ip_ref, kv_len=kv_len),
+                "collapse winner=1 全状态（含 KV 行拷贝）",
+            )
+    finally:
+        mini_model.config.max_batch_size = prev

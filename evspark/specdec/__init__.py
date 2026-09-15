@@ -5,7 +5,13 @@
 
 from evspark.specdec.harness import NextProbModel, run_native, run_speculative
 from evspark.specdec.transforms import apply_transform
-from evspark.specdec.verifier import VerifyResult, verify_round, verify_round_greedy
+from evspark.specdec.verifier import (
+    VerifyResult,
+    verify_round,
+    verify_round_greedy,
+    verify_round_greedy_multicand,
+    verify_round_multicand,
+)
 
 __all__ = [
     "NextProbModel",
@@ -15,4 +21,6 @@ __all__ = [
     "run_speculative",
     "verify_round",
     "verify_round_greedy",
+    "verify_round_greedy_multicand",
+    "verify_round_multicand",
 ]

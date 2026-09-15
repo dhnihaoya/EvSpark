@@ -355,3 +355,29 @@ def test_sampling_lossless_kl(mini_model):
     assert kl_cond_sn <= 2.0 * kl_cond_nn + slack, (
         f"split bigram cond KL spec/nat={kl_cond_sn} vs nat/nat={kl_cond_nn}"
     )
+
+
+def test_greedy_multicand_identity_equal(mini_model):
+    """D4b 管线：n_candidates=2 + 恒等 drafter 贪心仍与逐步 argmax 全等。"""
+    import torch
+
+    from evspark.specdec.block.loop import native_greedy_reference, speculative_generate
+    from evspark.specdec.drafts import IdentityDraftModel
+    from test_block_forward import PREFIX_LEN
+
+    rng = np.random.default_rng(SEED_PROMPT + 41)
+    prompt = _prompt_ids(torch, rng, PREFIX_LEN)
+    native, _ip, _ = native_greedy_reference(mini_model, prompt, N_GREEDY)
+    spec = speculative_generate(
+        mini_model,
+        IdentityDraftModel(),
+        prompt,
+        N_GREEDY,
+        4,
+        greedy=True,
+        rng=np.random.default_rng(0),
+        rollback="slice",
+        n_candidates=2,
+    )
+    np.testing.assert_array_equal(spec.emitted_ids, native)
+    assert spec.rounds_log[0].n_candidates == 2

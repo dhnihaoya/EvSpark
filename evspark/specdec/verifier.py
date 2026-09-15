@@ -22,6 +22,7 @@ class VerifyResult:
     accepted_mask: np.ndarray  # bool[γ]，逐位置接受标记（供位置接受率曲线）
     from_residual: bool  # 末位是否来自残差重采样（False 则为 bonus）
     fallback: bool  # 残差下溢 fallback 是否触发
+    winner: int = 0  # 多候选时胜出路径的 batch 下标；单路径恒 0
 
 
 def _as_prob_row(p: np.ndarray) -> np.ndarray:
@@ -172,4 +173,147 @@ def verify_round_greedy(
         accepted_mask=accepted_mask,
         from_residual=False,
         fallback=False,
+    )
+
+
+def _as_multicand_arrays(
+    draft_tokens: np.ndarray,
+    draft_probs: np.ndarray | None,
+    target_probs: np.ndarray,
+):
+    """统一成 ``[B, γ]`` / ``[B, γ, V]`` / ``[B, γ+1, V]``。"""
+    tokens = np.asarray(draft_tokens, dtype=np.int64)
+    p = np.asarray(target_probs, dtype=np.float64)
+    if tokens.ndim == 1:
+        tokens = tokens[None]
+    if p.ndim == 2:
+        p = p[None]
+    if tokens.ndim != 2 or p.ndim != 3:
+        raise ValueError(
+            f"多候选形状须为 draft[B,γ]、target[B,γ+1,V]，得到 {tokens.shape} / {p.shape}"
+        )
+    bsz, gamma = int(tokens.shape[0]), int(tokens.shape[1])
+    if p.shape[0] != bsz or p.shape[1] != gamma + 1:
+        raise ValueError(
+            f"target_probs 须为 [{bsz}, {gamma + 1}, V]，得到 {p.shape}"
+        )
+    q = None
+    if draft_probs is not None:
+        q = np.asarray(draft_probs, dtype=np.float64)
+        if q.ndim == 2:
+            q = q[None]
+        if q.shape != (bsz, gamma, p.shape[2]):
+            raise ValueError(
+                f"draft_probs 须为 [{bsz}, {gamma}, {p.shape[2]}]，得到 {q.shape}"
+            )
+    return tokens, q, p, bsz, gamma
+
+
+def verify_round_greedy_multicand(
+    draft_tokens: np.ndarray,
+    target_probs: np.ndarray,
+) -> VerifyResult:
+    """贪心多候选：SpecInfer VerifyGreedy（前缀树，子节点匹配 argmax 则下行）。
+
+    输出序列与逐步 ``argmax`` 逐位相同（无损）。``winner`` 取第一条匹配路径。
+    ``B=1`` 与 :func:`verify_round_greedy` 逐位一致。
+    """
+    tokens, _, p, bsz, gamma = _as_multicand_arrays(draft_tokens, None, target_probs)
+    accepted_mask = np.zeros(gamma, dtype=bool)
+    accepted: list[int] = []
+    live = list(range(bsz))
+    for i in range(gamma):
+        greedy_tok = int(np.argmax(p[live[0], i]))
+        matched = [b for b in live if int(tokens[b, i]) == greedy_tok]
+        if not matched:
+            return VerifyResult(
+                tokens=np.asarray(accepted + [greedy_tok], dtype=np.int64),
+                accepted_len=len(accepted),
+                accepted_mask=accepted_mask,
+                from_residual=True,
+                fallback=False,
+                winner=int(live[0]),
+            )
+        accepted_mask[i] = True
+        accepted.append(greedy_tok)
+        live = matched
+    bonus = int(np.argmax(p[live[0], gamma]))
+    return VerifyResult(
+        tokens=np.asarray(accepted + [bonus], dtype=np.int64),
+        accepted_len=gamma,
+        accepted_mask=accepted_mask,
+        from_residual=False,
+        fallback=False,
+        winner=int(live[0]),
+    )
+
+
+def verify_round_multicand(
+    draft_tokens: np.ndarray,
+    draft_probs: np.ndarray,
+    target_probs: np.ndarray,
+    rng: np.random.Generator,
+) -> VerifyResult:
+    """采样多候选：逐条路径叠 Leviathan 残差（SpecInfer MSS 的 batch 维实现）。
+
+    共享前缀的活路径各算一次提议（重复 token 也试，保证提议 ~ q）。
+    ``B=1`` 与 :func:`verify_round` 的 rng 消耗逐次一致。拒绝后
+    ``p ← norm(max(0, p − q))``，q 为该节点 draft 分布；全部失败则从残差采样。
+
+    树注意力在 StripedHyena2 上不可行；调用方须把 B 条路径放在 batch 维
+    做块验证，本函数只消费对齐后的 ``p[b, i]``。
+    """
+    tokens, q, p, bsz, gamma = _as_multicand_arrays(
+        draft_tokens, draft_probs, target_probs
+    )
+    assert q is not None
+    accepted_mask = np.zeros(gamma, dtype=bool)
+    accepted: list[int] = []
+    live = list(range(bsz))
+    fallback = False
+
+    for i in range(gamma):
+        p_i = _as_prob_row(p[live[0], i])
+        q_i = _as_prob_row(q[live[0], i])
+        chosen: int | None = None
+        p_work = p_i
+        for b in live:
+            x = int(tokens[b, i])
+            r = float(rng.random())
+            if r < _accept_prob(float(p_work[x]), float(q_i[x])):
+                chosen = x
+                break
+            residual = np.maximum(p_work - q_i, 0.0)
+            mass = float(residual.sum())
+            if mass <= 0.0 or not np.isfinite(mass):
+                fallback = True
+                p_work = _as_prob_row(p_i)
+                break
+            p_work = residual / mass
+
+        if chosen is None:
+            y = sample_categorical(p_work, rng)
+            return VerifyResult(
+                tokens=np.asarray(accepted + [y], dtype=np.int64),
+                accepted_len=len(accepted),
+                accepted_mask=accepted_mask,
+                from_residual=True,
+                fallback=fallback,
+                winner=int(live[0]),
+            )
+
+        accepted_mask[i] = True
+        accepted.append(chosen)
+        live = [b for b in live if int(tokens[b, i]) == chosen]
+        if not live:
+            raise RuntimeError("多候选活路径被滤空（不应发生）")
+
+    bonus = sample_categorical(_as_prob_row(p[live[0], gamma]), rng)
+    return VerifyResult(
+        tokens=np.asarray(accepted + [bonus], dtype=np.int64),
+        accepted_len=gamma,
+        accepted_mask=accepted_mask,
+        from_residual=False,
+        fallback=False,
+        winner=int(live[0]),
     )

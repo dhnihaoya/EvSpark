@@ -335,3 +335,71 @@ def test_tau_from_mask_matches_accepted_len_on_greedy():
     target = np.stack([p[1], p[2], p[3], p[0]], axis=0)
     r = verify_round_greedy(np.array([1, 2, 3], dtype=np.int64), target)
     assert r.accepted_len == tau_from_mask(r.accepted_mask) == 3
+
+
+def test_multicand_b1_matches_single_path():
+    """B=1 多候选与 verify_round / greedy 逐位 + rng 消耗一致。"""
+    from evspark.specdec.verifier import verify_round_greedy_multicand, verify_round_multicand
+
+    gamma = 4
+    v = 8
+    rng_p = np.random.default_rng(11)
+    q = rng_p.random((gamma, v))
+    q /= q.sum(axis=1, keepdims=True)
+    p = rng_p.random((gamma + 1, v))
+    p /= p.sum(axis=1, keepdims=True)
+    draft = np.array([int(np.argmax(q[i])) for i in range(gamma)], dtype=np.int64)
+
+    r1 = verify_round_greedy(draft, p)
+    r2 = verify_round_greedy_multicand(draft[None], p[None])
+    np.testing.assert_array_equal(r1.tokens, r2.tokens)
+    assert r1.accepted_len == r2.accepted_len
+    assert r2.winner == 0
+
+    rng_a = np.random.default_rng(99)
+    rng_b = np.random.default_rng(99)
+    s1 = verify_round(draft, q, p, rng_a)
+    s2 = verify_round_multicand(draft[None], q[None], p[None], rng_b)
+    np.testing.assert_array_equal(s1.tokens, s2.tokens)
+    assert s1.accepted_len == s2.accepted_len
+    assert s1.from_residual == s2.from_residual
+    assert s2.winner == 0
+
+
+def test_multicand_greedy_picks_matching_child():
+    from evspark.specdec.verifier import verify_round_greedy_multicand
+
+    # 位置 0：argmax(p)=2；路径 0 给 0，路径 1 给 2 → 应走路径 1
+    draft = np.array([[0, 0], [2, 7]], dtype=np.int64)
+    p = np.zeros((2, 3, 8), dtype=np.float64)
+    p[:, 0, 2] = 1.0
+    p[1, 1, 7] = 1.0  # 路径 1 在 pos1 的 p（活路径用 live[0] 会变成路径 1）
+    p[:, 1, 7] = 1.0
+    p[:, 2, 3] = 1.0  # bonus
+    r = verify_round_greedy_multicand(draft, p)
+    np.testing.assert_array_equal(r.tokens, np.array([2, 7, 3]))
+    assert r.accepted_len == 2
+    assert r.winner == 1
+
+
+def test_multicand_first_token_unigram_matches_p():
+    """γ=1、B=4、无前缀依赖的 p：首 token 经验分布贴近 p。"""
+    from evspark.specdec.verifier import verify_round_multicand
+
+    p = np.array([0.05, 0.15, 0.30, 0.50], dtype=np.float64)
+    q = np.array([0.40, 0.30, 0.20, 0.10], dtype=np.float64)
+    v = 4
+    bsz, gamma, n = 4, 1, 8_000
+    rng = np.random.default_rng(20260914)
+    counts = np.zeros(v, dtype=np.int64)
+    for _ in range(n):
+        drafts = rng.choice(v, size=(bsz, gamma), p=q)
+        q_rows = np.broadcast_to(q, (bsz, gamma, v)).copy()
+        p_rows = np.empty((bsz, gamma + 1, v), dtype=np.float64)
+        p_rows[:] = p
+        r = verify_round_multicand(drafts, q_rows, p_rows, rng)
+        counts[int(r.tokens[0])] += 1
+    emp = counts / n
+    # 多项分布 χ²；df=3，α=0.001 临界值 ≈ 16.27
+    chi2 = float(n * np.sum((emp - p) ** 2 / np.maximum(p, 1e-12)))
+    assert chi2 < 16.27, f"unigram χ²={chi2:.3f} emp={emp} p={p}"

@@ -87,24 +87,28 @@ class HiddenCapture:
         self._slot = {name: [] for name in self.layer_names}
         self._armed = True
 
-    def commit(self, n_keep: int) -> None:
+    def commit(self, n_keep: int, batch_idx: int = 0) -> None:
         if not self._armed:
             raise RuntimeError("HiddenCapture.commit 前须先 begin")
         self._armed = False
         n_keep = int(n_keep)
+        b = int(batch_idx)
         self.total_committed += n_keep
         for name in self.layer_names:
             pieces = self._slot.pop(name, [])
             if not pieces:
                 raise RuntimeError(f"层 {name} 本轮未捕获到任何输出")
-            cat = torch.cat(pieces, dim=1)[0]  # [T, H]
-            if n_keep > cat.shape[0]:
-                raise ValueError(f"n_keep={n_keep} 超过本轮捕获长度 {cat.shape[0]}")
+            cat = torch.cat(pieces, dim=1)  # [B, T, H]
+            if b < 0 or b >= int(cat.shape[0]):
+                raise ValueError(f"batch_idx={b} 超出捕获 batch={cat.shape[0]}")
+            row = cat[b]
+            if n_keep > row.shape[0]:
+                raise ValueError(f"n_keep={n_keep} 超过本轮捕获长度 {row.shape[0]}")
             if n_keep > 0:
                 # 滚动窗只保留最近 maxlen 位：仅转换能进窗的末段（与整段转换
                 # 逐位等价），长 prompt prefill 轮（n_keep≈L）省下整段 fp32 峰值
                 take = min(n_keep, self.maxlen)
-                kept = cat[n_keep - take : n_keep].float()
+                kept = row[n_keep - take : n_keep].float()
                 prev = self._buffers.get(name)
                 buf = kept if prev is None else torch.cat([prev, kept], dim=0)
                 self._buffers[name] = buf[-self.maxlen :]
@@ -303,8 +307,8 @@ class NeuralDraftModel:
     def capture_begin(self) -> None:
         self.capture.begin()
 
-    def capture_commit(self, n_keep: int) -> None:
-        self.capture.commit(n_keep)
+    def capture_commit(self, n_keep: int, batch_idx: int = 0) -> None:
+        self.capture.commit(n_keep, batch_idx=batch_idx)
 
     def capture_buffer_len(self) -> int:
         """累计已消费位置数（外部状态对齐自检，``loop`` 长 prompt 分块预填路径）。"""
@@ -326,12 +330,16 @@ class NeuralDraftModel:
         *,
         temperature: float = 1.0,
         top_k: int | None = 4,
+        inference_params_dict=None,
+        **_kwargs,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """一轮并行草稿：返回 ``(draft_tokens[γ′], q_rows[γ′, V], confs[γ′])``。
 
         ``gamma`` 为 decode γ′，须 ≤ 训练 γ（Step 18 A2 解耦：γ′ < 训练 γ =
         精确前缀计算；γ′ > 训练 γ 报 ValueError——pos 表只有训练 γ 行）。
+        ``inference_params_dict`` 由循环传入，本类忽略（H_ctx 走 hook）。
         """
+        del inference_params_dict
         if int(gamma) > self.gamma:
             raise ValueError(
                 f"decode γ={gamma} > drafter 训练 γ={self.gamma}：只允许 decode γ ≤ 训练 γ"
@@ -353,6 +361,89 @@ class NeuralDraftModel:
             temperature=temperature,
             top_k=top_k,
         )
+
+    @torch.no_grad()
+    def propose_blocks(
+        self,
+        anchor_id: int,
+        gamma: int,
+        greedy: bool,
+        rng: np.random.Generator,
+        n_candidates: int,
+        *,
+        temperature: float = 1.0,
+        top_k: int | None = 4,
+        inference_params_dict=None,
+        **_kwargs,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """提出 ``n_candidates`` 条草稿。采样：i.i.d. 从 q′；贪心：首位 top-B 展开再逐步 argmax。
+
+        返回 ``(tokens[B, γ′], q_rows[B, γ′, V], confs[B, γ′])``。
+        """
+        del inference_params_dict
+        B = int(n_candidates)
+        if B < 1:
+            raise ValueError(f"n_candidates 须 ≥ 1，得到 {B}")
+        if B == 1:
+            tok, q, c = self.propose_block(
+                anchor_id, gamma, greedy, rng, temperature=temperature, top_k=top_k
+            )
+            return tok[None], q[None], c[None]
+        if int(gamma) > self.gamma:
+            raise ValueError(
+                f"decode γ={gamma} > drafter 训练 γ={self.gamma}：只允许 decode γ ≤ 训练 γ"
+            )
+        device = self.drafter.pos.weight.device
+        h_raw = self.capture.context_tensor(self.drafter.ctx_window)
+        ctx_len = 0 if h_raw is None else int(h_raw.shape[0])
+        ctx_lens = torch.tensor([ctx_len], dtype=torch.long, device=device)
+        anchor = torch.tensor([int(anchor_id)], dtype=torch.long, device=device)
+        U, h = trunk_forward(self.drafter, anchor, h_raw, ctx_lens, gamma=int(gamma))
+        gamma_p = int(U.shape[1])
+        tokens = np.empty((B, gamma_p), dtype=np.int64)
+        q_rows = np.empty((B, gamma_p, VOCAB_SIZE), dtype=np.float64)
+        confs = np.empty((B, gamma_p), dtype=np.float64)
+        if greedy:
+            logits0 = U[0, 0] + self.drafter.markov[int(anchor_id)]
+            q0 = torch.softmax(logits0.float(), dim=-1)
+            q0_np = q0.detach().cpu().numpy().astype(np.float64, copy=False)
+            top = np.argsort(-q0_np)[:B]
+            for b, x0 in enumerate(top):
+                forced = np.empty(gamma_p, dtype=np.int64)
+                forced[0] = int(x0)
+                prev = int(x0)
+                for k in range(1, gamma_p):
+                    logits_k = U[0, k] + self.drafter.markov[prev]
+                    qk = torch.softmax(logits_k.float(), dim=-1).detach().cpu().numpy()
+                    nxt = int(np.argmax(qk))
+                    forced[k] = nxt
+                    prev = nxt
+                tok, q, c = serial_sample(
+                    self.drafter,
+                    U,
+                    h,
+                    int(anchor_id),
+                    True,
+                    rng,
+                    temperature=temperature,
+                    top_k=top_k,
+                    forced_tokens=forced,
+                )
+                tokens[b], q_rows[b], confs[b] = tok, q, c
+        else:
+            for b in range(B):
+                tok, q, c = serial_sample(
+                    self.drafter,
+                    U,
+                    h,
+                    int(anchor_id),
+                    False,
+                    rng,
+                    temperature=temperature,
+                    top_k=top_k,
+                )
+                tokens[b], q_rows[b], confs[b] = tok, q, c
+        return tokens, q_rows, confs
 
     def close(self) -> None:
         self.capture.close()

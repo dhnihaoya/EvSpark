@@ -41,7 +41,7 @@ from evspark.specdec.block import (
 # ACGTN 的字节级 token id（CharLevelTokenizer 约定）
 ACGTN_IDS = np.array([65, 67, 71, 84, 78], dtype=np.int64)
 TOL = 1e-4
-PREFIX_LEN = 192  # 须 ≥ HCM 滤波窗 127（否则 prefill 状态截断，step 语义有 quirk）
+PREFIX_LEN = 192  # 满窗格：≥ HCM K−1=127。短前缀另有 test_block_vs_step_short_prefix
 MODEL_SEED = 20260820
 TOKEN_SEED = 20260821
 
@@ -170,3 +170,67 @@ def test_block_vs_step(mini_model, gamma: int):
         for k in ("mha", "hcl", "hcm", "hcs"):
             assert ip[k].seqlen_offset == PREFIX_LEN + gamma
             assert ip_step[k].seqlen_offset == PREFIX_LEN + gamma
+
+
+@pytest.mark.parametrize("gamma", [2, 4])
+def test_block_vs_step_batch2(mini_model, gamma: int):
+    """D4a：B=2 同长块前向 vs 逐 token，logits 与 batch0 状态对拍。"""
+    prev = mini_model.config.max_batch_size
+    mini_model.config.max_batch_size = 2
+    try:
+        rng = np.random.default_rng(TOKEN_SEED + 100 + gamma)
+        prompt = torch.tensor(
+            rng.choice(ACGTN_IDS, size=(2, PREFIX_LEN)), dtype=torch.long, device="cuda:0"
+        )
+        chunk = torch.tensor(
+            rng.choice(ACGTN_IDS, size=(2, gamma)), dtype=torch.long, device="cuda:0"
+        )
+        with torch.inference_mode():
+            ip = mini_model.initialize_inference_params(max_seqlen=PREFIX_LEN + 64)
+            prefill(mini_model, prompt, ip)
+            ip_step = clone_inference_params(ip)
+            step_logits = step_forward_reference(mini_model, chunk, ip_step)
+            block_logits = block_forward(mini_model, chunk, ip)
+            diff = (block_logits.float() - step_logits.float()).abs()
+            assert float(diff.max()) < TOL, f"B=2 γ={gamma} logits max|diff|={float(diff.max()):.3e}"
+            kv_len = PREFIX_LEN + gamma
+            diffs = diff_states(
+                snapshot_states(ip, kv_len=kv_len, batch_size=2),
+                snapshot_states(ip_step, kv_len=kv_len, batch_size=2),
+            )
+            worst = max(diffs.items(), key=lambda kv: kv[1]["max_abs"])
+            assert worst[1]["max_abs"] < TOL, f"B=2 状态 {worst[0]}: {worst[1]['max_abs']:.3e}"
+    finally:
+        mini_model.config.max_batch_size = prev
+
+
+@pytest.mark.parametrize("prefix,gamma", [(64, 2), (64, 4), (8, 2), (4, 2)])
+def test_block_vs_step_short_prefix(mini_model, prefix: int, gamma: int):
+    """前缀短于 HCM（及更短时 HCS）窗：块前向须对齐 vortex step_fir 短 tap。"""
+    rng = np.random.default_rng(TOKEN_SEED + 200 + prefix + gamma)
+    prompt = _rand_ids(rng, prefix)
+    chunk = _rand_ids(rng, gamma)
+
+    with torch.inference_mode():
+        ip = mini_model.initialize_inference_params(max_seqlen=prefix + 64)
+        prefill(mini_model, prompt, ip)
+        ip_step = clone_inference_params(ip)
+        step_logits = step_forward_reference(mini_model, chunk, ip_step)
+        block_logits = block_forward(mini_model, chunk, ip)
+        diff = (block_logits[0].float() - step_logits[0].float()).abs()
+        assert float(diff.max()) < TOL, (
+            f"短前缀 L={prefix} γ={gamma} logits max|diff|={float(diff.max()):.3e}"
+        )
+        kv_len = prefix + gamma
+        diffs = diff_states(
+            snapshot_states(ip, kv_len=kv_len),
+            snapshot_states(ip_step, kv_len=kv_len),
+        )
+        worst = max(diffs.items(), key=lambda kv: kv[1]["max_abs"])
+        assert worst[1]["max_abs"] < TOL, (
+            f"短前缀 L={prefix} γ={gamma} 状态最大差 {worst[0]}: {worst[1]['max_abs']:.3e}"
+        )
+        hcm = ip["hcm"]
+        inner = next(iter(hcm.fir_inner_state_dict.values()))
+        want = min(prefix + gamma, 127)
+        assert inner.shape[-1] == want, f"HCM 状态末维 {inner.shape[-1]} != {want}"
