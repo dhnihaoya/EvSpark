@@ -14,10 +14,15 @@ from pathlib import Path
 
 # 已发布 checkpoint（说明见 README §Checkpoints）
 KNOWN_CKPTS = [
-    "L27_g12_150M_s1",     # 旗舰：γ=12，150M 蒸馏位置，all-48 3.27× / real-43 2.96×
+    "L27_g12_150M_s1",     # 7B 旗舰：γ=12，150M 蒸馏位置，all-48 3.27× / real-43 2.96×
     "L27_g12_150M_s2",     # 旗舰，第二种子
     "L27_g12_30M_s1",      # 1 GPU 时成本最优格，3.15×
     "L27_g12_30M_s2",
+    "phase3_20b_L20_g12_b1",  # 20B drafter（blocks.20 注入），10M 位置，2.53×/2.18×
+    "phase3_20b_L20_g12_b2",  # 20B，30M，2.51×/2.22×
+    "phase3_40b_L45_g12_b1",  # 40B drafter（blocks.45 注入），10M，2.72×/2.44×
+    "phase3_40b_L45_g12_b2",  # 40B，30M，2.78×/2.46×
+    "phase3_40b_L45_g12_b3",  # 40B，80M，2.72×/2.42×
 ]
 
 HF_REPO = os.environ.get("EVSPARK_HF_REPO", "dinghhhhhhhhhhhhhhh/EvSpark")
