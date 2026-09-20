@@ -201,6 +201,8 @@ def block_forward(
             L0=get_seqlen_offset(inference_params_dict),
             chunk_len=int(chunk_ids.shape[1]),
             flash_attn=_flash_kvcache_enabled(model),
+            lengths_before=(None if inference_params_dict['mha'].lengths_per_sample is None
+                            else inference_params_dict['mha'].lengths_per_sample[:chunk_ids.shape[0]].clone()),
         )
     for key in _HYENA_KEYS:
         setattr(inference_params_dict[key], _CHUNK_FLAG, True)

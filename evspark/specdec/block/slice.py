@@ -49,6 +49,8 @@ class ChunkStash:
     #: attention 是否走 flash_attn kvcache 快路径（driver 建 stash 时按模型记录）。
     #: 慢路径（SDPA）只认标量 seqlen_offset，变长切片会被 slice_states_to_accept 拒绝
     flash_attn: bool = True
+    #: 独立批量候选进入本轮时可能已有不同长度，不能再用共享 L0 推各行位置。
+    lengths_before: torch.Tensor | None = None
 
 
 def _hyena_params(ip_dict: dict, layer_idx: int):
@@ -161,7 +163,13 @@ def slice_states_to_accept(ip_dict: dict, stash: ChunkStash, k) -> None:
                 gathered[b] = s_all[b, ..., int(ks[b])]
             params.state_dict[layer_idx] = gathered
 
-    lengths = stash.L0 + ks + 1
+    starts = (np.full(batch, stash.L0, dtype=np.int64) if stash.lengths_before is None
+              else stash.lengths_before.detach().cpu().numpy().astype(np.int64))
+    if starts.shape != (batch,):
+        raise ValueError(f"本轮初始长度形状 {starts.shape} 与 batch={batch} 不一致")
+    lengths = starts + ks + 1
+    if np.any(lengths != lengths[0]) and not stash.flash_attn:
+        raise ValueError("不同初始长度/最终长度要求 flash_attn kvcache 快路径")
     off = int(lengths.max())
     set_seqlen_offsets(ip_dict, off)
     for key in PARAM_KEYS:

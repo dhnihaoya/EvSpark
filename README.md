@@ -2,7 +2,7 @@
 
 **Lossless speculative decoding for Evo2 — StripedHyena2 hybrid DNA foundation models**
 
-[**Paper (bioRxiv)**](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1)
+[**Paper (bioRxiv)**](https://www.biorxiv.org/content/10.64898/2026.09.02.749017)
 · [DOI](https://doi.org/10.64898/2026.09.02.749017)
 · [Hugging Face](https://huggingface.co/dinghhhhhhhhhhhhhhh/EvSpark)
 · [ModelScope](https://www.modelscope.cn/models/dinghao1120/EvSpark)
@@ -49,14 +49,16 @@ this v2 suite.
 | Long context: *E. coli* genome, 262k | 1.97× / 2.28× / 2.43× (3 seeds) |
 | Long context: *B. subtilis*, 262k | 1.84× / 2.05× |
 | Speedup vs context length | flat from 1k to 51k (GTDB 3-contig) |
+| Larger targets, same drafter recipe (H20, SDPA): Evo2 20B / 40B | 2.18–2.46× real-43 · 2.51–2.78× all-48 |
+| Regulatory-DNA design workflow vs batched native baseline | median **1.57×** complete-design speedup |
 | Greedy losslessness, 48 prompts × 6 checkpoints | **0 non-tie divergences** |
 | Sampling equivalence | KL ≤ 1.6× of a native-vs-native floor on 10 prompts |
 | Drafter training cost, γ=12@30M (→ 3.15×) | **~1.06 GPU-hour** on one 4090 |
-| Baselines (same protocol): Markov-k5 / prompt-lookup k=2, k=3 | 2.65× / 1.24× / 1.30× |
+| Training-free reference (same suite): prompt-lookup k=2 / k=3 | 1.276× / 1.282× |
 
 Full protocol, per-region table, ablations (injection layer, drafter width, γ,
 distill budget) and cost model are in the
-[paper](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1).
+[paper](https://www.biorxiv.org/content/10.64898/2026.09.02.749017).
 
 ## Install
 
@@ -202,11 +204,11 @@ corpus needed.
   journal = {bioRxiv},
   year    = {2026},
   doi     = {10.64898/2026.09.02.749017},
-  url     = {https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1}
+  url     = {https://www.biorxiv.org/content/10.64898/2026.09.02.749017}
 }
 ```
 
-Preprint: [https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1)
+Preprint: [https://www.biorxiv.org/content/10.64898/2026.09.02.749017](https://www.biorxiv.org/content/10.64898/2026.09.02.749017)
 
 ## License
 

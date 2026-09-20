@@ -1,0 +1,6 @@
+# 在以 evo2 Python 创建的 --system-site-packages venv 中安装；不升级 torch/CUDA。
+borzoi-pytorch==0.5.1
+enformer-pytorch==0.8.11
+transformers==4.57.6
+huggingface-hub==0.36.2
+safetensors==0.8.0

@@ -1,0 +1,206 @@
+{
+  "models": {
+    "EleutherAI/enformer-official-rough": {
+      "revision": "affe5713ae9017460706a44108289b13c5fee16c",
+      "files": {},
+      "remote": {
+        "config.json": {
+          "type": "file",
+          "oid": "e50a83cf5e2b127669849109f24c5edcc9361788",
+          "size": 439,
+          "path": "config.json"
+        },
+        "pytorch_model.bin": {
+          "type": "file",
+          "oid": "b1fc0ab75f2e9ecde1efc5a5cc53076d3c1e8b56",
+          "size": 1005149571,
+          "lfs": {
+            "oid": "99b09d602e195d89c7d4debe144bb2f43907ba0d74006e97098e99d9171c439c",
+            "size": 1005149571,
+            "pointerSize": 135
+          },
+          "xetHash": "3a3bd85608e334297c56452774e6a23b636e971b5c8cac9338ca4f4fb2831f7e",
+          "path": "pytorch_model.bin"
+        }
+      }
+    },
+    "johahi/flashzoi-replicate-0": {
+      "revision": "72040fb525d4b9abab21ead1c53b76b6bd8b6d67",
+      "files": {},
+      "remote": {
+        "config.json": {
+          "type": "file",
+          "oid": "d7816bdbb08cf26425758904b2c77fc8ca0cb5fa",
+          "size": 375,
+          "path": "config.json"
+        },
+        "model.safetensors": {
+          "type": "file",
+          "oid": "fcb6ae392eeffffc43a4e3ab4391c8a186ce7428",
+          "size": 788436548,
+          "lfs": {
+            "oid": "d0f17287f57da22af70a495d27e745b7d9908d2f3717214e7d0caf3dfe8c4d95",
+            "size": 788436548,
+            "pointerSize": 134
+          },
+          "xetHash": "eae46ab704ccfab4697cfd580206c65c0fa68ef1877aaf59ca54b907289934d7",
+          "path": "model.safetensors"
+        }
+      }
+    },
+    "johahi/flashzoi-replicate-1": {
+      "revision": "3e54f34c90e007e6da7ebe7bc83282c2d70bfc18",
+      "files": {},
+      "remote": {
+        "config.json": {
+          "type": "file",
+          "oid": "d7816bdbb08cf26425758904b2c77fc8ca0cb5fa",
+          "size": 375,
+          "path": "config.json"
+        },
+        "model.safetensors": {
+          "type": "file",
+          "oid": "3d897bffac78005a315842d4826b85c005f4abd6",
+          "size": 788436548,
+          "lfs": {
+            "oid": "1c3d206596009d881d429c1421c16eedcf94564b116d351948d4a67629e40c68",
+            "size": 788436548,
+            "pointerSize": 134
+          },
+          "xetHash": "b5c73b372de0b73e4f8647bc7e09dc052ce1f7bbf76dccecd2c9e30fde86f919",
+          "path": "model.safetensors"
+        }
+      }
+    },
+    "johahi/flashzoi-replicate-2": {
+      "revision": "524b05b3d3ed7f9acf28e51fc283f37affc26c28",
+      "files": {},
+      "remote": {
+        "config.json": {
+          "type": "file",
+          "oid": "d7816bdbb08cf26425758904b2c77fc8ca0cb5fa",
+          "size": 375,
+          "path": "config.json"
+        },
+        "model.safetensors": {
+          "type": "file",
+          "oid": "6503305318b11a09071f99e57730d1b4fa640644",
+          "size": 788436548,
+          "lfs": {
+            "oid": "51f8bb88d33e941db41a5305440b4e637bf6d06e30a2bb7005321c0f678cc3da",
+            "size": 788436548,
+            "pointerSize": 134
+          },
+          "xetHash": "d0969561626c93dd1fb8f6b985d827ffdcff7eb8191220d37491db73e68fb8c4",
+          "path": "model.safetensors"
+        }
+      }
+    },
+    "johahi/flashzoi-replicate-3": {
+      "revision": "336e45f85cbf0eafe8c8880984f1b561c79a5fe9",
+      "files": {},
+      "remote": {
+        "config.json": {
+          "type": "file",
+          "oid": "d7816bdbb08cf26425758904b2c77fc8ca0cb5fa",
+          "size": 375,
+          "path": "config.json"
+        },
+        "model.safetensors": {
+          "type": "file",
+          "oid": "60f976e2472084f8e18aaf355ba3e0f5cf946341",
+          "size": 788436548,
+          "lfs": {
+            "oid": "ca0df0ceaf106b47eb7f38ad48251a985d8b737f5791c296291806a794e5a007",
+            "size": 788436548,
+            "pointerSize": 134
+          },
+          "xetHash": "835f248cdd394019b0c7699b0f06568894c73756a90b6fe8e94379860568c42c",
+          "path": "model.safetensors"
+        }
+      }
+    },
+    "johahi/borzoi-replicate-0-mouse": {
+      "revision": "ca6b2a7645e22dc59fe5fcb4f50bb10c1e4d4a73",
+      "files": {},
+      "remote": {
+        "config.json": {
+          "type": "file",
+          "oid": "5cf9727a42d29ca7522e2134dced14c17d407416",
+          "size": 386,
+          "path": "config.json"
+        },
+        "model.safetensors": {
+          "type": "file",
+          "oid": "18c5a138876ea68621797c2541241bc7268eecfe",
+          "size": 705249696,
+          "lfs": {
+            "oid": "4e5dd67d1f58696457347d7dbe36f55b612d518bc32288f8c6da9f5d54bbb986",
+            "size": 705249696,
+            "pointerSize": 134
+          },
+          "xetHash": "510fdda2df3913b3a5841e3a27fe87d4b81f8ba3961e81b0f1ce28441154d4ee",
+          "path": "model.safetensors"
+        }
+      }
+    }
+  },
+  "files": {
+    "enformer_targets": {
+      "path": "data/phase5_assets/enformer_targets.tsv",
+      "sha256": "f76c869a38bfc79690d7a43e86f155db9b8ac8085ff5a717f99358b3253cd230",
+      "bytes": 250458,
+      "url": "https://raw.githubusercontent.com/calico/basenji/0.5/manuscripts/cross2020/targets_mouse.txt"
+    },
+    "borzoi_targets": {
+      "path": "data/phase5_assets/borzoi_targets.tsv",
+      "sha256": "b751060f82aa4ffe3cf818b49f9f066c37822cb86b88f8d736fc9a640ff5f854",
+      "bytes": 411585,
+      "url": "https://raw.githubusercontent.com/calico/borzoi/main/examples/targets_mouse.txt"
+    },
+    "upstream": {
+      "path": "data/phase5_assets/upstream.json",
+      "sha256": "82e189c6be61d8e483f94efeb5b2a57c7bcd89b51d54995b3f9e2ba6c5080e6d",
+      "bytes": 163998,
+      "url": "https://api.genome.ucsc.edu/getData/sequence?genome=mm39;chrom=chrX;start=51888088;end=52051928",
+      "assembly": "mm39",
+      "chrom": "chrX",
+      "start": 51888088,
+      "end": 52051928
+    },
+    "downstream": {
+      "path": "data/phase5_assets/downstream.json",
+      "sha256": "257be88179f5111fedc25f87016d6502c438e7d2bb9a2285297b65612cd7d6b4",
+      "bytes": 360606,
+      "url": "https://api.genome.ucsc.edu/getData/sequence?genome=mm39;chrom=chrX;start=52123468;end=52483916",
+      "assembly": "mm39",
+      "chrom": "chrX",
+      "start": 52123468,
+      "end": 52483916
+    },
+    "validation_enformer_test_sample.pt": {
+      "path": "data/phase5_assets/upstream_validation/enformer_test_sample.pt",
+      "sha256": "b811931f1264c3b43128d60a033546ff11af15207236e548745d615d80fefce1",
+      "bytes": 21139943,
+      "url": "https://raw.githubusercontent.com/lucidrains/enformer-pytorch/main/data/test-sample.pt"
+    },
+    "validation_test_pretrained.py": {
+      "path": "data/phase5_assets/upstream_validation/test_pretrained.py",
+      "sha256": "57817b3a8a139110e56eb8d8ffe5f5f7410709703feabbd17dfeb6d2d2fa729d",
+      "bytes": 464,
+      "url": "https://raw.githubusercontent.com/lucidrains/enformer-pytorch/main/test_pretrained.py"
+    },
+    "validation_borzoi_example.ipynb": {
+      "path": "data/phase5_assets/upstream_validation/borzoi_example.ipynb",
+      "sha256": "229692f422d2a4dbc1ef662541b94581a1638ff70865403624a35ff3f43f063c",
+      "bytes": 37877,
+      "url": "https://raw.githubusercontent.com/johahi/borzoi-pytorch/main/notebooks/pytorch_borzoi_example.ipynb"
+    },
+    "validation_borzoi_wt_seq.npy": {
+      "path": "data/phase5_assets/upstream_validation/borzoi_wt_seq.npy",
+      "sha256": "4a1e73c18be6233ff32de4ab478e9e87687a2108087a5aaae14b37ca1d129ce3",
+      "bytes": 8388736,
+      "url": "https://raw.githubusercontent.com/johahi/borzoi-pytorch/refs/heads/main/wt_seq.npy"
+    }
+  }
+}

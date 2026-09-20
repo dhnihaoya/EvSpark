@@ -510,6 +510,19 @@ def update_manifest(out_dir: Path, extra: dict, name: str = "manifest.json") -> 
     return man
 
 
+def json_map_arg(s: str | None) -> dict:
+    """--yield-calib-json 一类参数：inline JSON 或 @路径。"""
+    if not s:
+        return {}
+    t = s.strip()
+    if t.startswith("@"):
+        t = Path(t[1:]).read_text()
+    m = json.loads(t)
+    if not isinstance(m, dict):
+        raise RuntimeError(f"期望 JSON object，得到 {type(m).__name__}")
+    return m
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="C.1 teacher-only 压缩落盘")
     p.add_argument("--scheme", default="L27", help="SCHEME_LAYERS 名，默认 L27")
@@ -533,6 +546,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="限定 --sources 单源的 chunk 文件名白名单（逗号分隔；双卡分流用）")
     p.add_argument("--shard-tag", default="",
                    help="分片文件名后缀标签（如 A/B；meta.source 不变，双卡分流互不覆盖）")
+    p.add_argument("--yield-calib-json", default=None,
+                   help="源→得率 JSON（inline 或 @文件）。keep = quota/(est×yield)，"
+                        "校正 est_bp 按全量 bp 标定、有效窗得率不足导致的源短收；"
+                        "缺省全部 1.0 = 旧行为")
     p.add_argument("--scale-fp32", action="store_true",
                    help="hidden 量化 scale 用 fp32（末段 blocks.30/31 残差 ~1e11 会溢出 fp16；"
                         "Hyena 层默认 fp16 不变，读取侧 dtype 无关）")
@@ -558,6 +575,12 @@ def run(args: argparse.Namespace) -> dict:
     with_euk = not args.no_euk
     with_imgvr = not (args.no_imgvr or getattr(args, "smoke", False))
     weights = step14_weights(with_euk=with_euk, with_imgvr=with_imgvr)
+    ycalib = {k: float(v) for k, v in json_map_arg(args.yield_calib_json).items()}
+    if ycalib:
+        for k, v in ycalib.items():
+            if not 0.0 < v <= 1.0:
+                raise RuntimeError(f"yield-calib 须在 (0,1]：{k}={v}")
+        log(f"yield-calib 生效（keep 分母 = est×yield）: {ycalib}")
     if args.sources:
         want = [s.strip() for s in args.sources.split(",") if s.strip()]
     else:
@@ -614,7 +637,7 @@ def run(args: argparse.Namespace) -> dict:
     for name in want:
         files, est = source_files_and_est(name, files_filter)
         quota = int(round(sub_w[name] * total))
-        keep = min(1.0, quota / max(int(est), 1))
+        keep = min(1.0, quota / max(int(est * ycalib.get(name, 1.0)), 1))
         n_files = len(files) if isinstance(files, list) else 0
         log(f"计划 {name}{args.shard_tag}: quota={quota:,} est_bp={int(est):,} keep_prob={keep:.6g} files={n_files}")
         if name in SOURCE_SUB and n_files == 0:
@@ -659,6 +682,7 @@ def run(args: argparse.Namespace) -> dict:
             "window": args.window,
             "shard_pos": args.shard_pos,
             "weights": sub_w,
+            "yield_calib": ycalib or None,
             "with_euk": with_euk,
             "n_positions": n_total,
             "per_source": {

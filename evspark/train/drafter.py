@@ -42,6 +42,12 @@ SCHEME_LAYERS: dict[str, tuple[str, ...]] = {
     "L28": ("blocks.28",),
     "L29": ("blocks.29",),
     "D27_31": ("blocks.27", "blocks.31"),
+    # 40B（50 层）HCL 对位：L45 ≈ 7B L27（倒数第二拍 HCL），L48 ≈ 7B L30
+    "L34": ("blocks.34",),
+    "L38": ("blocks.38",),
+    "L41": ("blocks.41",),
+    "L45": ("blocks.45",),
+    "L48": ("blocks.48",),
 }
 
 
@@ -345,11 +351,16 @@ class Drafter(nn.Module):
         return {"embed.weight": self.embed.weight}
 
     def project_context(self, h_raw: torch.Tensor | None, batch: int) -> torch.Tensor:
-        """h_raw: [T, n_inject * 4096] 或 [1, T, ...] → [B, T, d]；S0 返回 T=0。"""
+        """共享 [T,H]/[1,T,H] 或独立 [B,T,H] 上下文 → [B,T,d]。"""
         if self.ctx_proj is None or h_raw is None:
             return torch.zeros(batch, 0, self.d_model, device=self.pos.weight.device, dtype=self.pos.weight.dtype)
         if h_raw.ndim == 3:
-            h_raw = h_raw.reshape(h_raw.shape[-2], h_raw.shape[-1])
+            if h_raw.shape[0] not in (1, batch):
+                raise ValueError(f"上下文 batch={h_raw.shape[0]} 与 batch={batch} 不兼容")
+            h_ctx = self.ctx_norm(self.ctx_proj(h_raw.float()))
+            return h_ctx.expand(batch, -1, -1)
+        if h_raw.ndim != 2:
+            raise ValueError(f"上下文须为 [T,H] 或 [B,T,H]，得到 {tuple(h_raw.shape)}")
         h_ctx = self.ctx_norm(self.ctx_proj(h_raw.float()))
         return h_ctx.unsqueeze(0).expand(batch, -1, -1)
 
