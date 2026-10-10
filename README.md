@@ -32,18 +32,22 @@ Evo2 7B (bf16), single stream, RTX 4090. Suite = 48 genomic prompts (43 real +
 
 | Metric | Value |
 |---|---|
-| Suite mean speedup, flagship drafter (γ=12, 150M distill tokens), all-48 | **3.27×** |
+| Suite mean speedup, flagship drafter (γ=12, 150M supervised positions), all-48 | **3.27×** |
 | — flagship, real-sequence subset (43 prompts) | 2.96× |
-| Suite mean, cost-optimal drafter (γ=12, 30M) | 3.15× / 2.82× (all-48 / real-43) |
+| Suite mean, lower-budget drafter (γ=12, 30M) | 3.15× / 2.82× (all-48 / real-43) |
 | Long context: *E. coli* genome, 262k | 1.97× / 2.28× / 2.43× (3 seeds) |
 | Speedup vs context length | flat from 1k to 51k (GTDB 3-contig) |
 | Larger targets, same drafter recipe (H20, SDPA): Evo2 20B / 40B | 2.18–2.46× real-43 · 2.51–2.78× all-48 |
 | Regulatory-DNA design workflow vs batched native baseline | median **1.57×** complete-design speedup |
 | Greedy losslessness, 48 prompts × 6 checkpoints | **0 non-tie divergences** |
-| Drafter training cost, γ=12@30M (→ 3.15×) | **~1.06 GPU-hour** on one 4090 |
+| Recorded training-loop time, γ=12@30M (→ 3.15×) | **32.2 min on 3× RTX 4090** (mean of three seeds) |
 | Training-free reference (same suite): prompt-lookup k=2 / k=3 | 1.276× / 1.282× |
 
-Full protocol, per-region table, ablations and cost model are in the
+Training-loop time includes evaluation, data handling and checkpointing; it
+excludes initialization and teacher-cache collection. Single-GPU and distributed
+runs are reported separately in the paper's training-time table.
+
+Full protocol, per-region table, ablations and training timings are in the
 [paper](https://www.biorxiv.org/content/10.64898/2026.09.02.749017).
 
 ## Install & quickstart
@@ -103,7 +107,7 @@ loadable via `NeuralDraftModel.from_checkpoint` (HF first, ModelScope fallback):
 | Checkpoint | Target | γ | Distill budget | Suite speedup (all-48 / real-43) |
 |---|---|---:|---:|---|
 | `L27_g12_150M_s1` / `_s2` | Evo2 7B | 12 | 150M | **3.27× / 2.96×** (flagship) |
-| `L27_g12_30M_s1` / `_s2` | Evo2 7B | 12 | 30M | 3.15× / 2.82× ("~1 GPU-hour" cell) |
+| `L27_g12_30M_s1` / `_s2` | Evo2 7B | 12 | 30M | 3.15× / 2.82× (lower-budget) |
 | `phase3_20b_L20_g12_b1` / `_b2` | Evo2 20B | 12 | 10M / 30M | 2.53×/2.18× · 2.51×/2.22× |
 | `phase3_40b_L45_g12_b1` / `_b2` / `_b3` | Evo2 40B | 12 | 10M / 30M / 80M | 2.72×/2.44× · 2.78×/2.46× · 2.72×/2.42× |
 
@@ -123,7 +127,7 @@ See [docs/reproduce.md](docs/reproduce.md): hidden-state dump → drafter traini
 ```bibtex
 @article{ding2026evspark,
   title   = {EvSpark: Lossless Speculative Decoding for Hybrid DNA Foundation Models},
-  author  = {Ding, Hao and Wu, Nannan and Qiu, Tianyi},
+  author  = {Ding, Hao and Nie, Wanchun and Zhang, Yuxi and Wu, Nannan and Qiu, Tianyi},
   journal = {bioRxiv},
   year    = {2026},
   doi     = {10.64898/2026.09.02.749017},

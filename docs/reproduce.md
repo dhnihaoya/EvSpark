@@ -1,6 +1,6 @@
 # Reproduction guide
 
-Paper: [EvSpark: Lossless Speculative Decoding for Hybrid DNA Foundation Models](https://www.biorxiv.org/content/10.64898/2026.09.02.749017v1)
+Paper: [EvSpark: Lossless Speculative Decoding for Hybrid DNA Foundation Models](https://www.biorxiv.org/content/10.64898/2026.09.02.749017)
 ([DOI: 10.64898/2026.09.02.749017](https://doi.org/10.64898/2026.09.02.749017)).
 
 End-to-end chain: environment → Evo2 weights → (optional) hidden-state dump →
@@ -35,11 +35,11 @@ python -m pytest tests -q                                # CPU suite; GPU tests 
 
 ## 3. Evaluation suite (24 prompts × 1024 tokens)
 
-This is the protocol behind every speedup number in the paper. The suite that
-ships inside the package, `evspark/data/eval_prompts_24.json`, is a
-self-contained 24-prompt subset of the paper's v2 48-prompt suite (43 real +
-5 random; the full pack lives in the main repository as
-`benchmarks/step18_suite_v2.json`). Regions: bacterial/viral coding, human
+The suite that ships inside the package, `evspark/data/eval_prompts_24.json`, is
+a self-contained 24-prompt subset of the paper's 48-prompt suite (43 real +
+5 random). The full prompt pack is supplied as `Supplementary_Data_1.json`
+with the paper's source-data archive. Results on the subset are not the paper's
+48-prompt headline aggregate. Regions: bacterial/viral coding, human
 intergenic, human repeats, OpenGenome2 domain slices, IMG-VR coding, random
 ACGT — the evaluation needs **no external corpus**. Checkpoints can be given
 by name (see `python scripts/download_ckpt.py --list`) or as a local `.pt`
@@ -65,8 +65,10 @@ CUDA_VISIBLE_DEVICES=0 python -u scripts/dump_c1_dataset.py \
   --total-positions 30000000
 ```
 
-The dump is large (~4 GB per 1M positions, int8-quantized top-8 distributions);
-30M positions is enough for the "1 GPU-hour" drafter. Sources are public corpora
+The dump is large (~4 GB per 1M cached positions, with int8 hidden features and
+top-8 teacher probabilities). Cached positions and supervised training positions
+are distinct counts; training anchors can supervise overlapping positions.
+Sources are public corpora
 (GTDB / OpenGenome2 / IMG-VR / NCBI / hg38); see the script header for download
 pointers. `python -m evspark.train.fetch_ncbi_coding` regenerates the NCBI
 coding slice (`data/ncbi_coding/`).
@@ -88,7 +90,15 @@ GPUS="0 1 2" bash scripts/launch_ddp.sh \
 ```
 
 Training mix (`final15`) is defined once in `evspark/train/mix.py`.
-γ=12 @ 30M positions costs ~1 GPU-hour on one RTX 4090.
+For γ=12 at 30M supervised positions, the recorded training-loop wall-clock
+averages 32.2 minutes on three RTX 4090s (three training seeds; range 31.2–33.5
+minutes). At 150M positions, seeds 1/2 average 381.5 minutes on one GPU, while
+seed 3 takes 183.4 minutes on three GPUs. These are historical execution modes,
+not a controlled comparison of training efficiency. The interval includes
+evaluation, data preparation and checkpointing, but excludes initialization and
+teacher-cache collection. See the paper's training-time table and
+`Supplementary_Data_3.csv` for all 33 runs. `Eval + other` includes all time outside
+the measured training steps; evaluation was not timed separately.
 
 ### 4.3 Evaluate the new drafter
 
